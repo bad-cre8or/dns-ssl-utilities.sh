@@ -60,7 +60,7 @@ exec bash
 
 # ⚡ Performance
 
-`dsu check` is deliberately a **hot path**. It does not run the vulnerability audit, cipher enumeration, redirect crawling, CT queries, DKIM selector sweeps, or other heavyweight checks. Independent DNS, WHOIS, HTTP, HTTPS and PTR work is launched concurrently, and the HTTPS transfer is reused for leaf-certificate data so a normal check does not need a second TLS handshake.
+`check` is deliberately a **hot path**. It does not run the vulnerability audit, cipher enumeration, redirect crawling, CT queries, DKIM selector sweeps, or other heavyweight checks. Independent DNS, WHOIS, HTTP, HTTPS and PTR work is launched concurrently, and the HTTPS transfer is reused for leaf-certificate data so a normal check does not need a second TLS handshake.
 
 The fast overview uses tighter deadlines than the deeper subcommands:
 
@@ -76,13 +76,13 @@ DSU_CHECK_PTR_TIMEOUT=1
 The normal DNS/HTTP/TLS subcommands retain more forgiving defaults. You can tune only the overview without changing the deeper tools:
 
 ```bash
-DSU_CHECK_MAX_TIME=6 dsu check example.com
+DSU_CHECK_MAX_TIME=6 check example.com
 ```
 
 For the lowest possible latency, skip reverse DNS for that invocation:
 
 ```bash
-dsu check example.com --no-rdns
+check example.com --no-rdns
 ```
 
 `DSU_AUDIT_JOBS` separately controls bounded concurrency for the defensive exposure audit. The default of `4` is intentionally conservative.
@@ -91,10 +91,10 @@ dsu check example.com --no-rdns
 
 # 🧰 Main Commands
 
-The canonical entry point is:
+The primary entry point is:
 
 ```bash
-dsu
+check
 ```
 
 You can also run the script directly:
@@ -108,7 +108,7 @@ You can also run the script directly:
 For the most useful domain information in one report:
 
 ```bash
-dsu check example.com
+check example.com
 ```
 
 This combines high-value DNS, registrar, mail, TLS, HTTP, hosting, and network information into a single readable output. It starts directly with the diagnostic sections: no product banner, tagline, target echo, spinner, or closing tip.
@@ -129,12 +129,12 @@ Perfect for:
 # 🧭 Command Structure
 
 ```text
-dsu check <domain>
-dsu dns <command> <target>
-dsu ssl <command> <target>
-dsu audit <target>
-dsu doctor
-dsu help
+check <domain>
+check dns <command> <target>
+check ssl <command> <target>
+check audit <target>
+check doctor
+check help
 ```
 
 Convenience frontends are also available:
@@ -145,6 +145,8 @@ ssl
 vulncheck
 ```
 
+For existing installs and scripts, `dsu` remains available as a compatibility alias for the suite dispatcher.
+
 ---
 
 # 🌍 DNS Toolkit
@@ -152,7 +154,7 @@ vulncheck
 Use:
 
 ```bash
-dsu dns --help
+check dns --help
 ```
 
 or:
@@ -295,7 +297,7 @@ ssl --help
 or:
 
 ```bash
-dsu ssl --help
+check ssl --help
 ```
 
 The SSL namespace supports both full command names and short aliases.
@@ -501,7 +503,7 @@ The suite can inspect:
 A full domain overview is usually the best starting point:
 
 ```bash
-dsu check example.com
+check example.com
 ```
 
 ---
@@ -517,7 +519,7 @@ vulncheck example.com
 or:
 
 ```bash
-dsu audit example.com
+check audit example.com
 ```
 
 The normal audit is designed to be **low-impact and non-destructive**.
@@ -719,7 +721,7 @@ Without `--strict`, security findings can still be present even when the command
 Check your environment with:
 
 ```bash
-dsu doctor
+check doctor
 ```
 
 This reports required, recommended, and optional tools and clearly shows what functionality is available.
@@ -765,7 +767,7 @@ The suite automatically uses colored terminal output when appropriate.
 To disable colors:
 
 ```bash
-NO_COLOR=1 dsu check example.com
+NO_COLOR=1 check example.com
 ```
 
 This is useful for:
@@ -784,15 +786,15 @@ The suite has hierarchical help.
 Start with:
 
 ```bash
-dsu --help
+check --help
 ```
 
 Then drill down:
 
 ```bash
-dsu dns --help
-dsu ssl --help
-dsu audit --help
+check dns --help
+check ssl --help
+check audit --help
 ```
 
 Command-specific help is also available:
@@ -806,9 +808,9 @@ ssl pack --help
 You can also use:
 
 ```bash
-dsu help
-dsu help ssl
-dsu help ssl cert
+check help
+check help ssl
+check help ssl cert
 ```
 
 ---
@@ -855,7 +857,7 @@ ssl cert example.com
 ## Get the important information for a domain
 
 ```bash
-dsu check example.com
+check example.com
 ```
 
 ## Inspect a certificate
@@ -903,7 +905,7 @@ vulncheck example.com --deep --ports --authorized
 ## Check installed dependencies
 
 ```bash
-dsu doctor
+check doctor
 ```
 
 ---
@@ -990,7 +992,7 @@ sudo apt install curl openssl dnsutils whois python3
 If a command is missing:
 
 ```bash
-dsu doctor
+check doctor
 ```
 
 That should be your first stop.
@@ -1018,7 +1020,7 @@ More active functionality requires explicit flags so that deeper checks are deli
 For domain, hosting, or registrar troubleshooting:
 
 ```bash
-dsu check example.com
+check example.com
 ```
 
 If the problem appears DNS-related:

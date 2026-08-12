@@ -25,7 +25,8 @@ Environment:
                     Default: ~/.local/bin
 
 Installed command links:
-  dsu  dns-ssl-utilities  ssl  dnsutil  sitecheck  vulncheck
+  check  ssl  dnsutil  vulncheck  sitecheck
+  dsu and dns-ssl-utilities are retained for compatibility.
 HELP
     exit 0
     ;;
@@ -121,7 +122,7 @@ auto_link() {
   printf 'link %s -> %s\n' "$dest" "$target"
 }
 
-for name in dns-ssl-utilities dsu ssl dnsutil sitecheck vulncheck; do
+for name in check ssl dnsutil vulncheck sitecheck dsu dns-ssl-utilities; do
   auto_link "$name"
 done
 
@@ -130,4 +131,4 @@ printf 'Command links:   %s\n' "$BIN_DIR"
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   printf '\nAdd this to your shell profile, then restart/source it:\n  export PATH="%s:$PATH"\n' "$BIN_DIR"
 fi
-printf '\nTry:\n  dsu --help\n  ssl c example.com\n  sitecheck example.com\n'
+printf '\nTry:\n  check example.com\n  check --help\n  ssl c example.com\n'

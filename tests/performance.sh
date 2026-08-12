@@ -125,6 +125,7 @@ fi
 exec /usr/bin/openssl "$@"
 MOCK
 chmod +x "$TMP/bin/"*
+ln -s "$SUITE" "$TMP/bin/check"
 
 measure_ms() {
   local start end
@@ -138,7 +139,7 @@ export PATH="$TMP/bin:$PATH"
 export DSU_TEST_DELAY=0.20
 export XDG_CACHE_HOME="$TMP/cache"
 
-check_ms=$(measure_ms "$SUITE" --no-color --ascii check example.test --fresh)
+check_ms=$(measure_ms check --no-color --ascii example.test --fresh)
 lookup_ms=$(measure_ms "$SUITE" --no-color --ascii dns lookup example.test)
 mail_ms=$(measure_ms "$SUITE" --no-color --ascii dns mail example.test)
 reverse_ms=$(measure_ms "$SUITE" --no-color --ascii dns reverse example.test)
@@ -158,7 +159,7 @@ printf 'dns reverse: %d ms\n' "$reverse_ms"
 
 # The everyday check is payload-first: no product banner, no target echo, no tip.
 export DSU_TEST_DELAY=0
-check_out=$("$SUITE" --no-color --ascii check example.test --fresh)
+check_out=$(check --no-color --ascii example.test --fresh)
 ! grep -q '^DNS + SSL Utilities$' <<<"$check_out" || { echo 'FAIL: check printed suite banner' >&2; exit 1; }
 ! grep -q '^Target:' <<<"$check_out" || { echo 'FAIL: check echoed target' >&2; exit 1; }
 ! grep -qi '^Tip:' <<<"$check_out" || { echo 'FAIL: check printed promotional tip' >&2; exit 1; }

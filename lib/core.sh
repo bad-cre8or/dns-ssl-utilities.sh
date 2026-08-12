@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared runtime helpers for dns-ssl-utilities.
 
-DSU_VERSION="2.2.1"
+DSU_VERSION="2.2.2"
 DSU_NAME="DNS + SSL Utilities"
 DSU_HOME="${DSU_HOME:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 DSU_CONNECT_TIMEOUT="${DSU_CONNECT_TIMEOUT:-4}"

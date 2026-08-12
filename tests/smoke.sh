@@ -21,6 +21,7 @@ pass 'shell/python syntax'
 help_out=$($SUITE --no-color --ascii --help)
 grep -q 'ssl cert, c' <<<"$help_out" || fail 'top-level help lacks ssl aliases'
 grep -q 'audit, a' <<<"$help_out" || fail 'top-level help lacks audit'
+grep -q 'check.*<domain>' <<<"$help_out" || fail 'top-level help lacks primary check usage'
 $SUITE --no-color ssl cert --help | grep -q 'Usage: ssl cert' || fail 'leaf help'
 pass 'hierarchical help'
 
@@ -169,8 +170,11 @@ TEST_HOME="$TMP/home"
 mkdir -p "$TEST_HOME"
 HOME="$TEST_HOME" DSU_INSTALL_DIR="$TEST_HOME/share/dsu" DSU_BIN_DIR="$TEST_HOME/bin" "$ROOT/setup.sh" >/dev/null
 [[ -x "$TEST_HOME/share/dsu/dns-ssl-utilities.sh" ]] || fail 'installer copy'
-[[ -L "$TEST_HOME/bin/ssl" && -L "$TEST_HOME/bin/dsu" ]] || fail 'installer aliases'
+[[ -L "$TEST_HOME/bin/check" && -L "$TEST_HOME/bin/ssl" && -L "$TEST_HOME/bin/dsu" ]] || fail 'installer aliases'
 alias_out=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" ssl --no-color cert --help); grep -q 'Usage: ssl cert' <<<"$alias_out" || fail 'installed ssl alias'
+check_help=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --no-color --ascii --help); grep -q 'check.*<domain>' <<<"$check_help" || fail 'installed check help'
+check_version=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --version); grep -q '2.2.2' <<<"$check_version" || fail 'installed check version'
+check_dns=$(HOME="$TEST_HOME" PATH="$TMP/mockbin:$TEST_HOME/bin:$PATH" check --no-color --ascii dns lookup example.test); grep -q '192.0.2.10' <<<"$check_dns" || fail 'check dns routing'
 pass 'installer and convenience entry points'
 
 # Regression: documentation files are optional and must never block install.
@@ -181,7 +185,7 @@ MIN_HOME="$TMP/minimal-home"
 mkdir -p "$MIN_HOME"
 HOME="$MIN_HOME" DSU_INSTALL_DIR="$MIN_HOME/share/dsu" DSU_BIN_DIR="$MIN_HOME/bin" "$MIN_SRC/setup.sh" >/dev/null
 [[ -x "$MIN_HOME/share/dsu/dns-ssl-utilities.sh" ]] || fail 'installer without .README'
-[[ -L "$MIN_HOME/bin/dsu" ]] || fail 'installer aliases without .README'
+[[ -L "$MIN_HOME/bin/check" && -L "$MIN_HOME/bin/dsu" ]] || fail 'installer aliases without .README'
 pass 'installer tolerates optional docs missing'
 
 printf '\nAll smoke tests passed.\n'

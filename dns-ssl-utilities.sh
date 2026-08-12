@@ -19,11 +19,12 @@ _dsu_main_help() {
   cat <<EOF_HELP
 
 ${DSU_BOLD}Usage${DSU_RESET}
+  ${DSU_GREEN}check${DSU_RESET} <domain> [options]                            ${DSU_GRAY}# primary fast overview${DSU_RESET}
+  ${DSU_GREEN}check${DSU_RESET} <command> [subcommand] [arguments]            ${DSU_GRAY}# suite commands${DSU_RESET}
   ${DSU_GREEN}dns-ssl-utilities.sh${DSU_RESET} <command> [subcommand] [arguments]
-  ${DSU_GREEN}dsu${DSU_RESET} <command> [subcommand] [arguments]             ${DSU_GRAY}# after setup.sh${DSU_RESET}
 
 ${DSU_BOLD}Fast paths${DSU_RESET}
-  ${DSU_GREEN}check, c${DSU_RESET} <domain>       Fast registrar/DNS/TLS/HTTP/PTR summary
+  ${DSU_GREEN}check${DSU_RESET} <domain>          Fast registrar/DNS/TLS/HTTP/PTR summary
   ${DSU_GREEN}audit, a${DSU_RESET} <target>       Web security exposure + hardening audit
   ${DSU_GREEN}rdns${DSU_RESET} <domain|ip>         Reverse DNS/PTR shortcut
   ${DSU_GREEN}cert${DSU_RESET} <domain>            TLS certificate shortcut
@@ -70,11 +71,12 @@ ${DSU_BOLD}${DSU_RED}Security audit${DSU_RESET}
       ${DSU_YELLOW}--ports${DSU_RESET} adds a top-100 TCP inventory in deep mode.
       Run ${DSU_CYAN}audit --help${DSU_RESET} for the full scope and severity model.
 
-${DSU_BOLD}Convenience commands installed by setup.sh${DSU_RESET}
-  ${DSU_GREEN}ssl cert example.com${DSU_RESET}       = ${DSU_GREEN}ssl c example.com${DSU_RESET}
-  ${DSU_GREEN}dnsutil lookup example.com${DSU_RESET} = ${DSU_GREEN}dnsutil l example.com${DSU_RESET}
-  ${DSU_GREEN}sitecheck example.com${DSU_RESET}      = full site check
-  ${DSU_GREEN}vulncheck example.com${DSU_RESET}      = security audit
+${DSU_BOLD}Installed commands${DSU_RESET}
+  ${DSU_GREEN}check example.com${DSU_RESET}           = primary full site check
+  ${DSU_GREEN}ssl cert example.com${DSU_RESET}        = ${DSU_GREEN}ssl c example.com${DSU_RESET}
+  ${DSU_GREEN}dnsutil lookup example.com${DSU_RESET}  = ${DSU_GREEN}dnsutil l example.com${DSU_RESET}
+  ${DSU_GREEN}vulncheck example.com${DSU_RESET}       = security audit
+  ${DSU_GRAY}dsu remains available as a compatibility command.${DSU_RESET}
 
 ${DSU_BOLD}Global options${DSU_RESET}
   ${DSU_GREEN}--help, -h${DSU_RESET}        This help
@@ -100,15 +102,16 @@ ${DSU_BOLD}Command help${DSU_RESET}
   ${DSU_CYAN}ssl --help${DSU_RESET}          SSL/TLS + certificate-file reference
   ${DSU_CYAN}site --help${DSU_RESET}         Site diagnostic reference
   ${DSU_CYAN}audit --help${DSU_RESET}        Audit scope, options and authorization model
-  ${DSU_CYAN}ssl cert --help${DSU_RESET}     Leaf-command help (also: dsu help ssl cert)
+  ${DSU_CYAN}ssl cert --help${DSU_RESET}     Leaf-command help (also: check help ssl cert)
 
 ${DSU_BOLD}Examples${DSU_RESET}
-  ${DSU_CYAN}dns-ssl-utilities.sh check example.com${DSU_RESET}
-  ${DSU_CYAN}dns-ssl-utilities.sh dns mail example.com selector1${DSU_RESET}
-  ${DSU_CYAN}dns-ssl-utilities.sh ssl c example.com${DSU_RESET}
-  ${DSU_CYAN}dns-ssl-utilities.sh ssl fetch 203.0.113.10 example.com${DSU_RESET}
-  ${DSU_CYAN}dns-ssl-utilities.sh audit example.com${DSU_RESET}
-  ${DSU_CYAN}dns-ssl-utilities.sh audit example.com --deep --authorized${DSU_RESET}
+  ${DSU_CYAN}check example.com${DSU_RESET}
+  ${DSU_CYAN}check example.com --no-rdns${DSU_RESET}
+  ${DSU_CYAN}check dns mail example.com selector1${DSU_RESET}
+  ${DSU_CYAN}check ssl c example.com${DSU_RESET}
+  ${DSU_CYAN}check ssl fetch 203.0.113.10 example.com${DSU_RESET}
+  ${DSU_CYAN}check audit example.com${DSU_RESET}
+  ${DSU_CYAN}check audit example.com --deep --authorized${DSU_RESET}
 
 ${DSU_BOLD}Dependencies${DSU_RESET}
   Required: ${DSU_WHITE}bash 4+, curl, openssl, dig (dnsutils), python3, coreutils${DSU_RESET}
@@ -164,6 +167,21 @@ file	file	optional
 DEPS
 }
 
+_dsu_dispatch_check_command() {
+  # When invoked as `check`, an ordinary first argument is the target.
+  # Known suite commands still route through the normal dispatcher, making
+  # `check dns ...`, `check ssl ...`, `check audit ...`, etc. intuitive.
+  case "${1:-}" in
+    "") _dsu_main_help ;;
+    help|--help|-h|version|--version|-v|doctor|diag|dns|ssl|tls|site|check|c|audit|a|vuln|vulnerability|security|sec|rdns|ptr|cert)
+      _dsu_dispatch_normal "$@"
+      ;;
+    *)
+      dsu_site_check "$@"
+      ;;
+  esac
+}
+
 _dsu_dispatch_normal() {
   local cmd="${1:-help}"; shift || true
   case "${cmd,,}" in
@@ -214,6 +232,7 @@ main() {
   local invoked
   invoked=$(basename -- "$0")
   case "$invoked" in
+    check) _dsu_dispatch_check_command "$@" ;;
     ssl) dsu_ssl_dispatch "$@" ;;
     dnsutil) dsu_dns_dispatch "$@" ;;
     sitecheck)
