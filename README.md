@@ -1,44 +1,50 @@
 # 🌐 DNS + SSL Utilities
 
-A colorful, practical command-line toolkit for **DNS diagnostics, SSL/TLS inspection, domain troubleshooting, mail-security checks, hosting analysis, and defensive website auditing**.
+**Fast DNS, TLS, certificate, hosting, mail, and web-security diagnostics from one terminal toolkit.**
 
-Built for Linux and WSL environments, with a focus on registrar, hosting, infrastructure, support, and security workflows.
+Built for **Linux and WSL**, with registrar, hosting, infrastructure, support, and security workflows in mind.
 
-> 🧰 One toolkit. Clear commands. Useful output. No tab-juggling required.
+```bash
+check example.com
+```
 
----
+That’s the main idea.
 
-## ✨ Highlights
-
-- 🌍 DNS lookups and delegation checks
-- 🔐 SSL/TLS certificate inspection
-- 📬 SPF, DMARC, DKIM, MX, MTA-STS, and TLS-RPT checks
-- 🧭 Registrar, WHOIS, nameserver, and hosting-provider information
-- 🔁 Forward and reverse DNS analysis
-- 🛡️ DNSSEC and CAA validation
-- 🌐 HTTP/HTTPS diagnostics and redirect tracing
-- 🚨 Defensive vulnerability and exposure auditing
-- 🧪 Optional deep authorized scans
-- 🎨 Colored terminal output with `NO_COLOR` support
-- ⚡ Short, memorable aliases
-- 🩺 Built-in dependency diagnostics
-- 🧠 Hierarchical help for the suite and individual commands
-- 🐧 Designed for Linux and WSL
+No banner. No ceremony. No digging through five different tools just to answer a customer’s domain question. ⚡
 
 ---
 
-# 🚀 Quick Start
+## ✨ What It Does
 
-## Install
+DNS + SSL Utilities brings the most useful domain and infrastructure diagnostics into one CLI:
+
+* 🌍 DNS records, delegation, DNSSEC, and reverse DNS
+* 🧭 WHOIS and registrar detection
+* 🏢 Hosting/provider identification
+* 📬 MX, SPF, DMARC, DKIM, MTA-STS, and TLS-RPT
+* 🔐 SSL/TLS certificates, chains, protocols, ciphers, OCSP, and CRLs
+* 🌐 HTTP/HTTPS status, redirects, and security headers
+* 🚨 Defensive website exposure and vulnerability auditing
+* 🔑 CSR, certificate, private-key, and PKCS#12 utilities
+* 🩺 Dependency and environment diagnostics
+* 🎨 Colored, readable terminal output
+* ⚡ Short aliases for common commands
+* 🐧 First-class Linux and WSL support
+
+---
+
+# 🚀 Installation
+
+Clone the repository and run:
 
 ```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-The installer places the suite in your local user environment and exposes convenient commands through `~/.local/bin`.
+The installer exposes the suite through `~/.local/bin`.
 
-Make sure this directory is in your `PATH`:
+Make sure that directory is available in your `PATH`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -56,88 +62,75 @@ or:
 exec bash
 ```
 
----
-
-# ⚡ Performance
-
-`check` is deliberately a **hot path**. It does not run the vulnerability audit, cipher enumeration, redirect crawling, CT queries, DKIM selector sweeps, or other heavyweight checks. Independent DNS, WHOIS, HTTP, HTTPS and PTR work is launched concurrently, and the HTTPS transfer is reused for leaf-certificate data so a normal check does not need a second TLS handshake.
-
-The fast overview uses tighter deadlines than the deeper subcommands:
-
-```text
-DSU_CHECK_DNS_TIMEOUT=1
-DSU_CHECK_CONNECT_TIMEOUT=2
-DSU_CHECK_MAX_TIME=4
-DSU_CHECK_WHOIS_TIMEOUT=10
-DSU_CHECK_WHOIS_HANDLE_TIMEOUT=10
-DSU_CHECK_PTR_TIMEOUT=1
-```
-
-The normal DNS/HTTP/TLS subcommands retain more forgiving defaults. You can tune only the overview without changing the deeper tools:
+Verify the installation:
 
 ```bash
-DSU_CHECK_MAX_TIME=6 check example.com
+check --version
 ```
-
-For the lowest possible latency, skip reverse DNS for that invocation:
-
-```bash
-check example.com --no-rdns
-```
-
-`DSU_AUDIT_JOBS` separately controls bounded concurrency for the defensive exposure audit. The default of `4` is intentionally conservative.
 
 ---
 
-# 🧰 Main Commands
+# ⚡ Start Here
 
-The primary entry point is:
-
-```bash
-check
-```
-
-You can also run the script directly:
-
-```bash
-./dns-ssl-utilities.sh
-```
-
-## 🌐 Full Domain Overview
-
-For the most useful domain information in one report:
+For a fast operational overview of a domain:
 
 ```bash
 check example.com
 ```
 
-This combines high-value DNS, registrar, mail, TLS, HTTP, hosting, and network information into a single readable output. It starts directly with the diagnostic sections: no product banner, tagline, target echo, spinner, or closing tip.
+The report focuses on the information most useful during real-world domain and hosting troubleshooting:
 
-Perfect for:
+* registrar
+* A / AAAA
+* nameservers
+* MX
+* DNSSEC
+* SPF
+* DMARC
+* CAA
+* hosting/provider signals
+* certificate hostname and expiry
+* HTTP / HTTPS status
+* redirects
+* HSTS
+* CSP
+* server headers
+* reverse DNS
 
-- domain troubleshooting
-- registrar support
-- hosting investigations
-- migration checks
-- DNS propagation issues
-- SSL troubleshooting
-- mail-delivery triage
-- customer support diagnostics
+`check` is deliberately designed as a **fast path**.
+
+It does **not** automatically run heavyweight operations such as vulnerability scanning, cipher enumeration, CT discovery, large DKIM sweeps, or deep redirect analysis.
+
+Those tools are available when you actually ask for them.
+
+### Skip reverse DNS
+
+PTR lookups can be slow or unreliable on some resolvers.
+
+For the quickest possible overview:
+
+```bash
+check example.com --no-rdns
+```
 
 ---
 
-# 🧭 Command Structure
+# 🧭 Command Overview
 
 ```text
 check <domain>
+
 check dns <command> <target>
 check ssl <command> <target>
 check audit <target>
+
 check doctor
 check help
+check --help
+check --version
 ```
 
-Convenience frontends are also available:
+Convenience commands are also installed:
 
 ```text
 dnsutil
@@ -145,13 +138,13 @@ ssl
 vulncheck
 ```
 
-For existing installs and scripts, `dsu` remains available as a compatibility alias for the suite dispatcher.
+`dsu` remains available as a compatibility alias for existing scripts and installations.
 
 ---
 
-# 🌍 DNS Toolkit
+# 🌍 DNS
 
-Use:
+View DNS help:
 
 ```bash
 check dns --help
@@ -163,14 +156,22 @@ or:
 dnsutil --help
 ```
 
-## 🔎 Lookup Records
+## 🔎 DNS Records
 
 ```bash
 dnsutil lookup example.com
 dnsutil l example.com
 ```
 
-Useful records include:
+Query a specific record type:
+
+```bash
+dnsutil lookup example.com MX
+dnsutil lookup example.com TXT
+dnsutil lookup example.com CAA
+```
+
+Supported record types include:
 
 ```text
 A
@@ -183,14 +184,6 @@ CAA
 SOA
 ```
 
-Examples:
-
-```bash
-dnsutil lookup example.com
-dnsutil lookup example.com MX
-dnsutil lookup example.com TXT
-```
-
 ---
 
 ## 🔁 Reverse DNS / PTR
@@ -200,40 +193,40 @@ dnsutil reverse 203.0.113.10
 dnsutil r 203.0.113.10
 ```
 
-IPv6 is supported as well:
+IPv6 is supported:
 
 ```bash
-dnsutil reverse 2001:db8::10
+dnsutil r 2001:db8::10
 ```
 
 PTR results are classified explicitly:
 
-- ✅ a real PTR answer is shown as successful
-- ℹ️ a successful DNS response with no PTR is shown as `no PTR`
-- ❌ resolver timeouts, `SERVFAIL`, unreachable DNS servers, and transport errors are shown as lookup failures
+* ✅ **PTR found**
+* ℹ️ **No PTR configured**
+* ❌ **Resolver or lookup failure**
 
-Resolver diagnostics are never presented as PTR hostnames.
+Timeouts, `SERVFAIL`, unreachable resolvers, and transport errors are never presented as successful PTR records.
 
 ---
 
-## 📬 Mail Security
+## 📬 Mail DNS & Policy
 
 ```bash
 dnsutil mail example.com
 dnsutil m example.com
 ```
 
-Checks may include:
+Checks include:
 
-- MX records
-- SPF
-- DMARC
-- DKIM selectors
-- MTA-STS
-- TLS-RPT
-- suspicious or invalid SPF layouts
-- MX targets using CNAMEs
-- mail-related DNS inconsistencies
+* MX
+* SPF
+* DMARC
+* DKIM selectors
+* MTA-STS
+* TLS-RPT
+* multiple or invalid SPF records
+* MX targets incorrectly using CNAME
+* related mail-DNS inconsistencies
 
 ---
 
@@ -243,7 +236,7 @@ Checks may include:
 dnsutil dnssec example.com
 ```
 
-Useful for confirming whether a domain is signed and whether validation succeeds.
+Checks DNSSEC records and resolver validation.
 
 ---
 
@@ -254,41 +247,58 @@ dnsutil trace example.com
 dnsutil t example.com
 ```
 
-Helps diagnose:
+Useful for diagnosing:
 
-- parent/child nameserver mismatches
-- delegation problems
-- stale nameservers
-- DNSSEC delegation issues
-- broken authoritative paths
+* parent/child nameserver mismatches
+* stale delegations
+* broken authoritative paths
+* DNSSEC delegation problems
+* incorrect nameserver changes
 
 ---
 
-## 🧾 WHOIS / Registrar Information
+## 🧾 WHOIS & Registrar
 
 ```bash
 dnsutil whois example.com
 dnsutil w example.com
 ```
 
-Registrar detection uses a deliberately conservative WHOIS sequence: query the registrable domain with a 10-second guard, read `Registrar:` directly when present, handle multi-line `Registrar:` responses, then fall back to `Registrar Handle` and resolve `Registrar Name` with a second 10-second guard. The compact site overview places the registrar first. 🧭
+Registrar detection uses a conservative WHOIS sequence designed to handle the inconsistent formats returned by different registries.
+
+It checks:
+
+1. direct `Registrar:` values
+2. multi-line registrar fields
+3. registrar handles
+4. registrar-name resolution from those handles when necessary
+
+WHOIS operations use bounded timeouts so a slow registry cannot hang indefinitely.
 
 ---
 
-## 🏢 Hosting / Provider Detection
+## 🏢 Hosting Provider Detection
 
 ```bash
 dnsutil hosting example.com
 dnsutil h example.com
 ```
 
-Provider detection uses available DNS, IP, PTR, ASN/provider-style signals, and hostname information where possible.
+Provider detection uses available signals such as:
+
+* A / AAAA records
+* CNAMEs
+* PTR hostnames
+* known address ranges
+* hosting/provider naming patterns
+
+The result is intentionally presented as a **best-effort guess** rather than pretending infrastructure detection is always absolute.
 
 ---
 
-# 🔐 SSL / TLS Toolkit
+# 🔐 SSL / TLS
 
-Use:
+View SSL help:
 
 ```bash
 ssl --help
@@ -300,45 +310,45 @@ or:
 check ssl --help
 ```
 
-The SSL namespace supports both full command names and short aliases.
+Most SSL commands also have short aliases.
 
 ---
 
-## 📜 Certificate Inspection
+## 📜 Certificate Details
 
 ```bash
 ssl cert example.com
 ssl c example.com
 ```
 
-Shows useful certificate information such as:
+Displays information such as:
 
-- subject
-- issuer
-- validity dates
-- expiry
-- SANs
-- serial number
-- signature algorithm
-- key information
-- certificate fingerprints
+* subject
+* issuer
+* SANs
+* validity period
+* expiry
+* serial number
+* signature algorithm
+* key information
+* certificate fingerprints
 
-Custom port:
+Custom TLS port:
 
 ```bash
-ssl cert example.com:8443
+ssl c example.com:8443
 ```
 
 ---
 
-## ⚡ Quick TLS Check
+## ⚡ Quick Certificate Check
 
 ```bash
 ssl quick example.com
 ssl q example.com
 ```
 
-Useful when you want a fast answer without the full certificate dump.
+For when you mostly care whether the certificate is healthy and how long it has left.
 
 ---
 
@@ -349,27 +359,35 @@ ssl chain example.com
 ssl ch example.com
 ```
 
+Displays the certificate chain served by the remote endpoint.
+
 ---
 
-## 🎯 Connect to a Specific IP with SNI
-
-Useful when multiple servers host the same domain:
+## 🎯 Test SNI Against a Specific IP
 
 ```bash
 ssl fetch example.com 203.0.113.10
 ```
 
-This connects to the selected IP while still sending the domain as SNI.
+Connects directly to the specified IP while still sending the hostname through SNI.
+
+Useful for:
+
+* migrations
+* load balancers
+* origin testing
+* pre-DNS-cutover checks
+* multi-server environments
 
 ---
 
-## 🧪 TLS Protocol Support
+## 🧪 TLS Versions
 
 ```bash
-ssl protocols example.com
+ssl versions example.com
 ```
 
-Checks support for protocol generations such as:
+Tests protocol support such as:
 
 ```text
 TLS 1.0
@@ -387,11 +405,11 @@ ssl ciphers example.com
 ssl ci example.com
 ```
 
-If `sslscan` is installed, the suite can use it for broader cipher analysis.
+If `sslscan` is installed, it can be used for broader cipher enumeration.
 
 ---
 
-## 🪪 Certificate Fingerprints
+## 🪪 Fingerprints
 
 ```bash
 ssl fingerprint example.com
@@ -408,7 +426,7 @@ ssl ocsp example.com
 
 ---
 
-## 🧹 CRL Information
+## 🧹 CRL
 
 ```bash
 ssl crl example.com
@@ -424,17 +442,28 @@ ssl ct example.com
 
 ---
 
+## ⚙️ TLS Performance
+
+```bash
+ssl performance example.com
+ssl perf example.com
+```
+
+Measures TLS handshake performance.
+
+---
+
 # 🔑 Certificate & Key Utilities
 
-The suite can also work with local certificate material.
+The SSL toolkit also works with local certificate material.
 
-## ✍️ Create a CSR
+## ✍️ Create a Private Key + CSR
 
 ```bash
 ssl new example.com
 ```
 
-Use command-specific help for available options:
+See all options:
 
 ```bash
 ssl new --help
@@ -448,22 +477,29 @@ ssl new --help
 ssl decode certificate.pem
 ```
 
+Supports certificate, CSR, and private-key inspection.
+
 ---
 
-## 🧩 Match Certificate, CSR, and Key
+## 🧩 Verify Certificate / CSR / Key Matching
 
 ```bash
 ssl match certificate.pem private.key
 ```
 
-The comparison uses public-key hashes, making it suitable for RSA and EC material.
+Matching is based on public-key hashes and supports both RSA and EC material.
 
 ---
 
-## 📦 PKCS#12 / PFX Packaging
+## 📦 Create PKCS#12 / PFX
 
 ```bash
 ssl pack certificate.pem private.key output.pfx
+```
+
+Short form:
+
+```bash
 ssl pk certificate.pem private.key output.pfx
 ```
 
@@ -477,40 +513,33 @@ ssl extract certificate.pfx
 
 ---
 
-## ⚙️ TLS Handshake Performance
-
-```bash
-ssl performance example.com
-ssl perf example.com
-```
-
----
-
-# 🌐 HTTP & Website Diagnostics
+# 🌐 HTTP / HTTPS Diagnostics
 
 The suite can inspect:
 
-- HTTP status
-- HTTPS availability
-- redirect chains
-- response headers
-- server information
-- security headers
-- certificate behavior
-- protocol behavior
-- network endpoints
+* HTTP and HTTPS availability
+* status codes
+* redirect behavior
+* response headers
+* HSTS
+* CSP
+* server disclosure
+* certificate behavior
+* protocol behavior
 
-A full domain overview is usually the best starting point:
+For the normal operational view:
 
 ```bash
 check example.com
 ```
 
+Use the dedicated site or audit commands when you need deeper HTTP analysis.
+
 ---
 
-# 🚨 Defensive Vulnerability Audit
+# 🚨 Defensive Security Audit
 
-Run the standard defensive audit with:
+Run the standard audit:
 
 ```bash
 vulncheck example.com
@@ -524,77 +553,67 @@ check audit example.com
 
 The normal audit is designed to be **low-impact and non-destructive**.
 
-It focuses on configuration weaknesses, information exposure, TLS posture, DNS mistakes, and common web-security problems.
+It focuses on weaknesses that are useful during infrastructure and hosting reviews without attempting exploitation.
 
 ---
 
-# 🛡️ What the Audit Checks
+## 🛡️ Audit Coverage
 
-## 🔐 TLS / Certificate Security
+### 🔐 TLS & Certificates
 
 Checks may include:
 
-- invalid or mismatched certificates
-- expired certificates
-- near-expiry warnings
-- weak certificate signature algorithms
-- weak public-key sizes
-- deprecated TLS versions
-- TLS compression
-- cipher posture
-- OCSP stapling
-- certificate-chain problems
+* hostname mismatch
+* expiry and near-expiry
+* weak signature algorithms
+* weak public keys
+* deprecated TLS versions
+* TLS compression
+* weak cipher posture
+* OCSP stapling
+* certificate-chain problems
 
----
-
-## 🌍 DNS Security
+### 🌍 DNS
 
 Checks may include:
 
-- DNSSEC posture
-- CAA records
-- dangling CNAME indicators
-- suspicious NXDOMAIN dependencies
-- invalid SPF layouts
-- multiple SPF records
-- mail DNS inconsistencies
-- MX targets incorrectly using CNAME records
+* DNSSEC
+* CAA
+* dangling CNAME indicators
+* suspicious NXDOMAIN dependencies
+* multiple SPF records
+* invalid SPF configuration
+* MX/CNAME problems
+* other mail-related DNS mistakes
 
----
-
-## 📬 Mail Security
+### 📬 Mail Policy
 
 Checks may include:
 
-- SPF
-- DMARC
-- MX
-- MTA-STS
-- TLS-RPT
-- selected DKIM discovery
-- policy weaknesses
+* SPF
+* DMARC
+* MX
+* DKIM discovery
+* MTA-STS
+* TLS-RPT
 
----
-
-## 🧱 HTTP Security Headers
+### 🧱 HTTP Security Headers
 
 Checks may include:
 
-- Strict-Transport-Security
-- Content-Security-Policy
-- X-Frame-Options
-- frame-ancestors
-- X-Content-Type-Options
-- Referrer-Policy
-- Permissions-Policy
-- Cross-Origin-Opener-Policy
-- Cross-Origin-Resource-Policy
+* `Strict-Transport-Security`
+* `Content-Security-Policy`
+* `X-Frame-Options`
+* `frame-ancestors`
+* `X-Content-Type-Options`
+* `Referrer-Policy`
+* `Permissions-Policy`
+* `Cross-Origin-Opener-Policy`
+* `Cross-Origin-Resource-Policy`
 
----
+### 🍪 Cookies
 
-## 🍪 Cookie Security
-
-The audit can detect cookies missing protections such as:
+Detects cookies missing protections such as:
 
 ```text
 Secure
@@ -602,27 +621,26 @@ HttpOnly
 SameSite
 ```
 
----
+### 🌐 CORS
 
-## 🌐 CORS
+Looks for suspicious or overly permissive cross-origin configurations.
 
-Checks include suspicious configurations such as overly permissive origins and dangerous credential combinations.
-
----
-
-## 🚪 HTTP Methods
+### 🚪 HTTP Methods
 
 Checks may inspect:
 
-- TRACE
-- OPTIONS
-- unexpectedly exposed methods
+```text
+TRACE
+OPTIONS
+```
+
+and other unexpectedly exposed methods.
 
 ---
 
-## 🔓 Accidental Exposure Detection
+# 🔓 Accidental Exposure Detection
 
-The scanner can safely check for common exposed files and endpoints such as:
+The audit can probe for commonly exposed files and diagnostic endpoints such as:
 
 ```text
 /.env
@@ -641,55 +659,61 @@ The scanner can safely check for common exposed files and endpoints such as:
 /package.json
 ```
 
-The suite performs **signature/content validation** where practical instead of treating every HTTP `200` response as a confirmed exposure.
+Where practical, responses are checked for recognizable content instead of assuming every HTTP `200` represents a real exposure.
 
-This reduces false positives on websites using soft-404 pages.
+This helps avoid false positives from soft-404 pages.
 
 ---
 
-## 🧑‍💻 Frontend Security Signals
+# 🧑‍💻 Frontend Security Signals
 
 Checks may include:
 
-- mixed-content references
-- password forms submitted insecurely
-- directory listing indicators
-- insecure redirects
-- information-leaking headers
-- missing `security.txt`
+* mixed-content references
+* password forms over insecure transport
+* directory listings
+* insecure redirects
+* information-leaking headers
+* missing `security.txt`
 
 ---
 
 # 🧨 Deep Authorized Audit
 
-For systems you are explicitly authorized to assess:
+For systems you own or are explicitly authorized to assess:
 
 ```bash
 vulncheck example.com --deep --authorized
 ```
 
-Deep mode can add more active checks such as:
+Deep mode can add checks such as:
 
-- DNS zone-transfer attempts
-- open-recursion checks
-- broader TLS cipher inspection
-- safe Nmap TLS/HTTP NSE scripts
+* DNS zone-transfer attempts
+* open DNS recursion
+* broader cipher inspection
+* safe Nmap HTTP/TLS NSE scripts
 
-To include a top-100 TCP port inventory:
+Optional top-100 TCP port inventory:
 
 ```bash
 vulncheck example.com --deep --ports --authorized
 ```
 
-> ⚠️ Only use deep scanning against infrastructure you own or are explicitly authorized to test.
+> ⚠️ **Only run deep scans against infrastructure you own or have explicit permission to assess.**
 
-The suite deliberately avoids destructive behavior such as credential attacks, denial-of-service testing, exploit payload execution, destructive fuzzing, or authentication bypass attempts.
+The suite deliberately avoids destructive actions such as:
+
+* credential attacks
+* denial-of-service testing
+* exploit execution
+* destructive fuzzing
+* authentication bypass attempts
 
 ---
 
-# 🎯 Strict Audit Mode
+# 🎯 Strict Mode & Exit Codes
 
-By default, audit findings are reported without making the command itself fail.
+Normal audits report findings without necessarily causing the command itself to fail.
 
 For automation or CI:
 
@@ -697,36 +721,34 @@ For automation or CI:
 vulncheck example.com --strict
 ```
 
-Then inspect the exit code:
+Inspect the result:
 
 ```bash
 echo $?
 ```
 
-Current exit behavior:
+Current exit codes:
 
 ```text
 0    Command completed successfully
-1    Operational failure, or MEDIUM audit finding with --strict
-2    Invalid usage, or HIGH/CRITICAL audit finding with --strict
-127  Missing required command dependency
+1    Operational failure, or MEDIUM finding with --strict
+2    Invalid usage, or HIGH/CRITICAL finding with --strict
+127  Required dependency missing
 ```
 
-Without `--strict`, security findings can still be present even when the command exits with `0`.
+Without `--strict`, findings may still be present when the command exits with `0`.
 
 ---
 
 # 🩺 Dependency Doctor
 
-Check your environment with:
+Check the local environment:
 
 ```bash
 check doctor
 ```
 
-This reports required, recommended, and optional tools and clearly shows what functionality is available.
-
-Common dependencies include:
+Common dependencies:
 
 ```text
 curl
@@ -736,14 +758,14 @@ whois
 python3
 ```
 
-Optional tools can unlock additional functionality:
+Optional tools unlock additional functionality:
 
 ```text
 sslscan
 nmap
 ```
 
-On Debian/Ubuntu/WSL, a useful starting point is:
+For Debian, Ubuntu, or WSL:
 
 ```bash
 sudo apt update
@@ -756,34 +778,67 @@ Optional:
 sudo apt install nmap sslscan
 ```
 
-Package availability can vary by distribution.
+Package availability may vary by distribution.
+
+---
+
+# ⚡ Performance Tuning
+
+The normal `check` path uses tighter limits than the deeper diagnostic commands:
+
+```text
+DSU_CHECK_DNS_TIMEOUT=1
+DSU_CHECK_CONNECT_TIMEOUT=2
+DSU_CHECK_MAX_TIME=4
+DSU_CHECK_WHOIS_TIMEOUT=10
+DSU_CHECK_WHOIS_HANDLE_TIMEOUT=10
+DSU_CHECK_PTR_TIMEOUT=1
+```
+
+Override them per invocation:
+
+```bash
+DSU_CHECK_MAX_TIME=6 check example.com
+```
+
+The vulnerability scanner uses bounded concurrency controlled by:
+
+```text
+DSU_AUDIT_JOBS
+```
+
+Default:
+
+```text
+4
+```
+
+This keeps audits faster without unnecessarily hammering the target.
 
 ---
 
 # 🎨 Colors
 
-The suite automatically uses colored terminal output when appropriate.
+Colored output is enabled automatically when appropriate.
 
-To disable colors:
+Disable it with:
 
 ```bash
 NO_COLOR=1 check example.com
 ```
 
-This is useful for:
+Useful for:
 
-- logs
-- CI
-- text processing
-- redirected output
+* logs
+* CI
+* redirected output
+* text processing
 
 ---
 
-# 🧠 Help System
+# 🧠 Help
 
-The suite has hierarchical help.
-
-Start with:
+Start here:
 
 ```bash
 check --help
@@ -797,7 +852,7 @@ check ssl --help
 check audit --help
 ```
 
-Command-specific help is also available:
+Command-specific help is available too:
 
 ```bash
 ssl cert --help
@@ -805,7 +860,7 @@ ssl new --help
 ssl pack --help
 ```
 
-You can also use:
+Alternative help syntax:
 
 ```bash
 check help
@@ -815,11 +870,9 @@ check help ssl cert
 
 ---
 
-# ⚡ Command Aliases
+# ⚡ Short Aliases
 
-Short aliases are intended to keep common operations fast without making commands cryptic.
-
-Examples:
+Common commands have memorable short forms:
 
 ```text
 ssl cert         → ssl c
@@ -838,7 +891,7 @@ dns whois        → dns w
 dns hosting      → dns h
 ```
 
-Example:
+For example:
 
 ```bash
 ssl c example.com
@@ -852,57 +905,63 @@ ssl cert example.com
 
 ---
 
-# 🧪 Examples
+# 🧪 Common Workflows
 
-## Get the important information for a domain
+### Get the important domain information
 
 ```bash
 check example.com
 ```
 
-## Inspect a certificate
+### Fast check without PTR
+
+```bash
+check example.com --no-rdns
+```
+
+### Inspect the certificate
 
 ```bash
 ssl c example.com
 ```
 
-## Diagnose mail DNS
+### Diagnose mail DNS
 
 ```bash
 dnsutil m example.com
 ```
 
-## Trace delegation
+### Trace DNS delegation
 
 ```bash
 dnsutil t example.com
 ```
 
-## Check reverse DNS
+### Check reverse DNS
 
 ```bash
 dnsutil r 203.0.113.10
 ```
 
-## Run a defensive audit
+### Run a defensive audit
 
 ```bash
 vulncheck example.com
 ```
 
-## Run an authorized deep audit
+### Run an authorized deep audit
 
 ```bash
 vulncheck example.com --deep --authorized
 ```
 
-## Include port discovery
+### Include port discovery
 
 ```bash
 vulncheck example.com --deep --ports --authorized
 ```
 
-## Check installed dependencies
+### Diagnose the local environment
 
 ```bash
 check doctor
@@ -926,11 +985,11 @@ dns-ssl-utilities/
 
 ### `dns-ssl-utilities.sh`
 
-Main CLI and command router.
+Main command router.
 
 ### `lib/`
 
-Reusable shell modules, formatting helpers, network logic, audit functionality, and command implementations.
+Shared shell modules and command implementations.
 
 ### `helpers/`
 
@@ -938,22 +997,23 @@ Supporting utilities used by the suite.
 
 ### `tests/`
 
-Smoke tests and regression checks.
+Smoke, regression, and performance tests.
 
 ---
 
 # 🔧 Updating
 
-If the installed copy includes the updater:
+From a Git checkout:
+
+```bash
+git pull
+./setup.sh
+```
+
+If your installation includes the updater:
 
 ```bash
 ./update.sh
-```
-
-If you installed from a Git checkout, you can also update the repository normally and rerun:
-
-```bash
-./setup.sh
 ```
 
 The installer is designed to be safe to rerun.
@@ -962,68 +1022,74 @@ The installer is designed to be safe to rerun.
 
 # 🧪 Testing
 
-Run the included smoke suite with:
+Run the smoke tests:
 
 ```bash
 ./tests/smoke.sh
 ```
 
-Run the performance regression checks with:
+Run the performance regression tests:
 
 ```bash
 ./tests/performance.sh
 ```
 
-The tests cover key CLI behavior, syntax, help routing, certificate workflows, DNS parsing, audit authorization controls, installation behavior, and protection against accidentally re-serializing latency-sensitive network checks.
+The test suite covers areas such as:
+
+* CLI routing
+* help output
+* DNS parsing
+* registrar detection
+* PTR result classification
+* certificate workflows
+* audit authorization controls
+* installation behavior
+* performance regressions
 
 ---
 
-# 🐧 WSL Notes
+# 🐧 WSL
 
-The suite works especially well in WSL when Linux networking tools are installed inside the distribution.
-
-Recommended baseline:
+For WSL, install the Linux-side networking tools inside your distribution:
 
 ```bash
 sudo apt update
 sudo apt install curl openssl dnsutils whois python3
 ```
 
-If a command is missing:
+Then verify everything with:
 
 ```bash
 check doctor
 ```
 
-That should be your first stop.
-
 ---
 
-# 🔒 Security Model
+# 🔒 Security & Authorization
 
-The auditing functionality is intended for:
+The auditing tools are intended for:
 
-- systems you own
-- systems operated by your organization
-- customer infrastructure you are authorized to inspect
-- test environments
-- approved security assessments
+* infrastructure you own
+* infrastructure operated by your organization
+* customer systems you are authorized to inspect
+* test environments
+* approved security assessments
 
 Standard scans are designed to remain low-impact.
 
-More active functionality requires explicit flags so that deeper checks are deliberate rather than accidental.
+More active functionality requires explicit flags so deeper checks are intentional.
 
 ---
 
 # 💡 Recommended Workflow
 
-For domain, hosting, or registrar troubleshooting:
+Start simple:
 
 ```bash
 check example.com
 ```
 
-If the problem appears DNS-related:
+If the problem looks DNS-related:
 
 ```bash
 dnsutil l example.com
@@ -1031,7 +1097,7 @@ dnsutil t example.com
 dnsutil m example.com
 ```
 
-If it appears TLS-related:
+If it looks TLS-related:
 
 ```bash
 ssl q example.com
@@ -1039,7 +1105,7 @@ ssl c example.com
 ssl ch example.com
 ```
 
-If you need a defensive security review:
+For a defensive security review:
 
 ```bash
 vulncheck example.com
@@ -1053,27 +1119,21 @@ vulncheck example.com --deep --authorized
 
 ---
 
-# 🤝 Philosophy
+# 🤝 Design Philosophy
 
-Good infrastructure tooling should answer three questions quickly:
+Infrastructure tooling should answer three questions quickly:
 
 1. 🔎 **What is configured?**
-2. 🚦 **Is it working correctly?**
+2. 🚦 **Is it working?**
 3. 🛡️ **Is anything obviously unsafe or exposed?**
 
-DNS + SSL Utilities is built around making those answers fast, readable, and useful from a terminal.
+DNS + SSL Utilities is built to answer those questions without turning a simple domain check into an expedition.
 
 ---
 
 # 📄 License
 
-See:
-
-```text
-LICENSE
-```
-
-for license information.
+See `LICENSE` for license information.
 
 ---
 
