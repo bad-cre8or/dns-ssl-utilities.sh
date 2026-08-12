@@ -50,7 +50,7 @@ dsu_disable_color() { _dsu_color_enabled=0; _dsu_apply_colors; }
 
 dsu_banner() {
   printf '\n%s%s%s%s\n' "$DSU_BOLD" "$DSU_CYAN" "$DSU_NAME" "$DSU_RESET"
-  printf '%s%s%s\n' "$DSU_GRAY" 'DNS, TLS, certificate, hosting and web-security diagnostics' "$DSU_RESET"
+  printf '%s%s%s\n' "$DSU_GRAY" 'DNS, TLS, domains, mail, hosting and security diagnostics' "$DSU_RESET"
 }
 
 dsu_section() {

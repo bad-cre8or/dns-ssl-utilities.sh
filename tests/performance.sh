@@ -27,13 +27,13 @@ pos=()
 for x in "$@"; do [[ "$x" == +* ]] || pos+=("$x"); done
 type="${pos[0]:-}"; name="${pos[1]:-}"
 case "$type:$name" in
-  A:*) echo '192.0.2.10' ;;
-  AAAA:*) echo '2001:db8::10' ;;
+  A:*) printf '192.0.2.10\n192.0.2.11\n192.0.2.12\n' ;;
+  AAAA:*) printf '2001:db8::10\n2001:db8::11\n2001:db8::12\n' ;;
   NS:*) printf 'ns1.example.test.\nns2.example.test.\n' ;;
-  MX:*) echo '10 mail.example.test.' ;;
+  MX:*) printf '10 mx1.example.test.\n20 mx2.example.test.\n30 mx3.example.test.\n' ;;
   DNSKEY:*) echo '257 3 13 TESTKEY' ;;
   DS:*) echo '12345 13 2 TESTDS' ;;
-  CAA:*) echo '0 issue "letsencrypt.org"' ;;
+  CAA:*) printf '0 issue \"letsencrypt.org\"\n0 issuewild \"letsencrypt.org\"\n' ;;
   TXT:_dmarc.*) echo '"v=DMARC1; p=reject"' ;;
   TXT:_mta-sts.*) echo '"v=STSv1; id=1"' ;;
   TXT:_smtp._tls.*) echo '"v=TLSRPTv1; rua=mailto:tls@example.test"' ;;
@@ -139,7 +139,7 @@ export PATH="$TMP/bin:$PATH"
 export DSU_TEST_DELAY=0.20
 export XDG_CACHE_HOME="$TMP/cache"
 
-check_ms=$(measure_ms check --no-color --ascii example.test --fresh)
+check_ms=$(measure_ms check --no-color --ascii example.test)
 lookup_ms=$(measure_ms "$SUITE" --no-color --ascii dns lookup example.test)
 mail_ms=$(measure_ms "$SUITE" --no-color --ascii dns mail example.test)
 reverse_ms=$(measure_ms "$SUITE" --no-color --ascii dns reverse example.test)
@@ -159,7 +159,7 @@ printf 'dns reverse: %d ms\n' "$reverse_ms"
 
 # The everyday check is payload-first: no product banner, no target echo, no tip.
 export DSU_TEST_DELAY=0
-check_out=$(check --no-color --ascii example.test --fresh)
+check_out=$(check --no-color --ascii example.test)
 ! grep -q '^DNS + SSL Utilities$' <<<"$check_out" || { echo 'FAIL: check printed suite banner' >&2; exit 1; }
 ! grep -q '^Target:' <<<"$check_out" || { echo 'FAIL: check echoed target' >&2; exit 1; }
 ! grep -qi '^Tip:' <<<"$check_out" || { echo 'FAIL: check printed promotional tip' >&2; exit 1; }
@@ -167,6 +167,23 @@ first_payload=$(printf '%s\n' "$check_out" | awk 'NF {print; exit}')
 [[ "$first_payload" == *'REGISTRAR'* ]] || { echo 'FAIL: registrar is not the first check section' >&2; exit 1; }
 grep -q 'Example Registrar' <<<"$check_out" || { echo 'FAIL: registrar missing from check' >&2; exit 1; }
 grep -q 'Certificate hostname match' <<<"$check_out" || { echo 'FAIL: TLS certificate data missing from reused HTTPS probe' >&2; exit 1; }
+
+# Repeated DNS/mail records stay one-per-line, and MX belongs only to MAIL.
+for ip in 192.0.2.10 192.0.2.11 192.0.2.12; do
+  grep -q "A: $ip" <<<"$check_out" || { echo "FAIL: A record $ip missing from check" >&2; exit 1; }
+done
+for ip in 2001:db8::10 2001:db8::11 2001:db8::12; do
+  grep -q "AAAA: $ip" <<<"$check_out" || { echo "FAIL: AAAA record $ip missing from check" >&2; exit 1; }
+done
+! grep -Eq 'A: .*[,][[:space:]]*192\.0\.2\.' <<<"$check_out" || { echo 'FAIL: A records were collapsed onto one line' >&2; exit 1; }
+! grep -Eq 'AAAA: .*[,][[:space:]]*2001:db8' <<<"$check_out" || { echo 'FAIL: AAAA records were collapsed onto one line' >&2; exit 1; }
+
+dns_block=$(awk '/== DNS$/{in_dns=1; next} /== MAIL & SECURITY POLICY$/{in_dns=0} in_dns' <<<"$check_out")
+mail_block=$(awk '/== MAIL & SECURITY POLICY$/{in_mail=1; next} /== HOSTING$/{in_mail=0} in_mail' <<<"$check_out")
+! grep -q 'MX:' <<<"$dns_block" || { echo 'FAIL: MX leaked into DNS section' >&2; exit 1; }
+for mx in '10 mx1.example.test' '20 mx2.example.test' '30 mx3.example.test'; do
+  grep -q "MX: $mx" <<<"$mail_block" || { echo "FAIL: MX record $mx missing from mail section" >&2; exit 1; }
+done
 
 printf 'presentation: clean\n'
 printf '\nPerformance regression checks passed.\n'

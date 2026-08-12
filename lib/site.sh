@@ -2,49 +2,60 @@
 
 _dsu_site_usage() {
   cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}Site diagnostics${DSU_RESET}
+${DSU_BOLD}${DSU_CYAN}Website diagnostics${DSU_RESET}
 
-${DSU_BOLD}Usage:${DSU_RESET}
-  dns-ssl-utilities.sh site <command> [arguments]
-  sitecheck <domain>                          ${DSU_GRAY}# after setup.sh${DSU_RESET}
+The primary site overview is simply:
+  ${DSU_GREEN}check <domain> [--no-rdns]${DSU_RESET}
 
-${DSU_GREEN}check, c${DSU_RESET}        Fast registrar + DNS + mail + hosting + TLS + HTTP + PTR summary
-${DSU_GREEN}headers, h${DSU_RESET}      HTTP response/security headers
-${DSU_GREEN}redirects, r${DSU_RESET}    Follow and display HTTP/HTTPS redirect chains
-${DSU_GREEN}status, s${DSU_RESET}       Compact HTTP + TLS availability status
+Additional site commands:
+  ${DSU_GREEN}check site headers${DSU_RESET} <domain-or-url>
+  ${DSU_GREEN}check site redirects${DSU_RESET} <domain-or-url>
+  ${DSU_GREEN}check site status${DSU_RESET} <domain>
 
-${DSU_BLUE}Examples${DSU_RESET}
-  sitecheck example.com
-  dsu check example.com
-  dsu check example.com --no-rdns
-  dns-ssl-utilities.sh site redirects http://example.com
+Compatibility frontend:
+  ${DSU_GREEN}sitecheck${DSU_RESET} <domain>
+  ${DSU_GREEN}sitecheck${DSU_RESET} <headers|redirects|status> ...
+
+${DSU_BOLD}Examples${DSU_RESET}
+  ${DSU_CYAN}check example.com${DSU_RESET}
+  ${DSU_CYAN}check example.com --no-rdns${DSU_RESET}
+  ${DSU_CYAN}check site headers example.com${DSU_RESET}
+  ${DSU_CYAN}check site redirects http://example.com${DSU_RESET}
 EOF_HELP
 }
 
 _dsu_site_leaf_help() {
   case "${1,,}" in
     check|c|full) cat <<EOF
-${DSU_BOLD}site check${DSU_RESET} — fast operational domain summary
-Usage: site check <domain> [--no-rdns]
-Alias: site c
+${DSU_BOLD}Fast domain overview${DSU_RESET}
+Usage: check <domain> [--no-rdns]
 
-The default path is intentionally lean: registrar, useful DNS records, DNSSEC,
-SPF/DMARC/CAA, hosting guess, TLS certificate expiry, HTTP/HTTPS posture and PTR.
+Reports registrar, useful DNS records, DNSSEC, SPF/DMARC/CAA, hosting/provider
+signals, TLS certificate health, HTTP/HTTPS posture and PTR results.
 It does not run the vulnerability audit or heavyweight TLS scans.
 
 Options:
-  --no-rdns  Skip PTR checks for the lowest possible latency
+  --no-rdns  Skip PTR lookups for the lowest possible latency
 EOF
       ;;
-    headers|header|h) printf '%b\n' "${DSU_BOLD}site headers${DSU_RESET} — Usage: site headers <domain-or-url>  (alias: site h)" ;;
-    redirects|redirect|r) printf '%b\n' "${DSU_BOLD}site redirects${DSU_RESET} — Usage: site redirects <domain-or-url>  (alias: site r)" ;;
-    status|s) printf '%b\n' "${DSU_BOLD}site status${DSU_RESET} — Usage: site status <domain>  (alias: site s)" ;;
+    headers|header|h) printf '%b\n' "${DSU_BOLD}Site headers${DSU_RESET}\nUsage: check site headers <domain-or-url>\nShortcut: sitecheck headers <domain-or-url>" ;;
+    redirects|redirect|r) printf '%b\n' "${DSU_BOLD}Redirect chain${DSU_RESET}\nUsage: check site redirects <domain-or-url>\nShortcut: sitecheck redirects <domain-or-url>" ;;
+    status|s) printf '%b\n' "${DSU_BOLD}Site status${DSU_RESET}\nUsage: check site status <domain>\nShortcut: sitecheck status <domain>" ;;
     *) _dsu_site_usage ;;
   esac
 }
 
-_dsu_site_join_lines() {
-  awk 'NF { if (seen++) printf ", "; printf "%s", $0 } END { if (seen) printf "\n" }'
+_dsu_site_print_records() {
+  local level="$1" label="$2" data="$3" line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    case "$level" in
+      ok) dsu_ok "$label: $line" ;;
+      info) dsu_info "$label: $line" ;;
+      warn) dsu_warn "$label: $line" ;;
+      bad) dsu_bad "$label: $line" ;;
+    esac
+  done <<<"$data"
 }
 
 _dsu_site_provider_guess() {
@@ -165,7 +176,7 @@ _dsu_site_print_http_code() {
 
 dsu_site_check() {
   local input="${1:-}" host tmp no_rdns=0
-  [[ -n "$input" ]] || { dsu_bad "Usage: site check <domain> [--no-rdns]"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check <domain> [--no-rdns]"; return 2; }
   shift || true
   while (( $# )); do
     case "$1" in
@@ -250,11 +261,22 @@ dsu_site_check() {
   caa=$(cat "$tmp/caa" 2>/dev/null || true)
 
   dsu_section "DNS"
-  [[ -n "$a" ]] && dsu_ok "A: $(printf '%s\n' "$a" | _dsu_site_join_lines)" || dsu_warn "No A record"
-  [[ -n "$aaaa" ]] && dsu_ok "AAAA: $(printf '%s\n' "$aaaa" | _dsu_site_join_lines)" || dsu_info "No AAAA record"
-  [[ -n "$cname" ]] && dsu_info "CNAME: $(printf '%s\n' "$cname" | _dsu_site_join_lines)"
-  [[ -n "$ns" ]] && dsu_ok "NS: $(printf '%s\n' "$ns" | _dsu_site_join_lines)" || dsu_bad "No NS records returned"
-  [[ -n "$mx" ]] && dsu_ok "MX: $(printf '%s\n' "$mx" | _dsu_site_join_lines)" || dsu_info "No MX records"
+  if [[ -n "$a" ]]; then
+    _dsu_site_print_records ok "A" "$a"
+  else
+    dsu_warn "No A record"
+  fi
+  if [[ -n "$aaaa" ]]; then
+    _dsu_site_print_records ok "AAAA" "$aaaa"
+  else
+    dsu_info "No AAAA record"
+  fi
+  [[ -n "$cname" ]] && _dsu_site_print_records info "CNAME" "$cname"
+  if [[ -n "$ns" ]]; then
+    _dsu_site_print_records ok "NS" "$ns"
+  else
+    dsu_bad "No NS records returned"
+  fi
   if grep -q 'flags:.* ad[; ]' "$tmp/dnssec" 2>/dev/null; then
     dsu_ok "DNSSEC validated"
   elif [[ -s "$tmp/dnskey" ]]; then
@@ -264,9 +286,18 @@ dsu_site_check() {
   fi
 
   dsu_section "MAIL & SECURITY POLICY"
+  if [[ -n "$mx" ]]; then
+    _dsu_site_print_records ok "MX" "$mx"
+  else
+    dsu_info "No MX records"
+  fi
   [[ -n "$spf" ]] && dsu_ok "SPF: $spf" || dsu_warn "SPF missing"
   [[ -n "$dmarc" ]] && dsu_ok "DMARC: $dmarc" || dsu_warn "DMARC missing"
-  [[ -n "$caa" ]] && dsu_ok "CAA: $(printf '%s\n' "$caa" | _dsu_site_join_lines)" || dsu_warn "CAA missing"
+  if [[ -n "$caa" ]]; then
+    _dsu_site_print_records ok "CAA" "$caa"
+  else
+    dsu_warn "CAA missing"
+  fi
 
   local provider first_ip ptr_blob=''
   first_ip=$(printf '%s\n%s\n' "$a" "$aaaa" | awk 'NF {print; exit}')
@@ -379,7 +410,7 @@ dsu_site_headers() {
 
 dsu_site_redirects() {
   local input="${1:-}" url
-  [[ -n "$input" ]] || { dsu_bad "Usage: site redirects <url-or-domain>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check site redirects <url-or-domain>"; return 2; }
   dsu_need curl curl || return
   url="$input"; [[ "$url" == http://* || "$url" == https://* ]] || url="http://$url"
   dsu_section "Redirect chain · $url"
@@ -390,7 +421,7 @@ dsu_site_redirects() {
 
 dsu_site_status() {
   local input="${1:-}" host tmp end days pid_http pid_https pid_tls http https
-  [[ -n "$input" ]] || { dsu_bad "Usage: site status <domain>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check site status <domain>"; return 2; }
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; return 2; }
   tmp=$(dsu_tmpdir) || return 1

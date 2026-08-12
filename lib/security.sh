@@ -2,41 +2,49 @@
 
 _dsu_audit_usage() {
   cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}Web security exposure audit${DSU_RESET}
+${DSU_BOLD}${DSU_CYAN}Defensive website security audit${DSU_RESET}
 
-${DSU_BOLD}Usage:${DSU_RESET}
-  dns-ssl-utilities.sh audit <domain-or-url> [options]
-  vulncheck <domain-or-url> [options]          ${DSU_GRAY}# after setup.sh${DSU_RESET}
+${DSU_BOLD}Usage${DSU_RESET}
+  ${DSU_GREEN}check audit${DSU_RESET} <domain-or-url> [options]
+  ${DSU_GREEN}vulncheck${DSU_RESET} <domain-or-url> [options]
 
-The default audit is non-destructive and low-impact: DNS policy, certificate/TLS,
-HTTP-to-HTTPS behavior, security headers, cookies, CORS, methods, mixed content,
-and a small set of common accidental-exposure paths. It does not attempt SQLi,
-XSS, password attacks, destructive fuzzing, authentication bypass, or exploitation.
+The default audit is low-impact and non-destructive. It reviews DNS policy,
+certificate/TLS posture, HTTP-to-HTTPS behavior, security headers, cookies,
+CORS, HTTP methods, frontend signals and common accidental-exposure paths.
+
+It does not attempt credential attacks, destructive fuzzing, denial of service,
+authentication bypass or exploit execution.
 
 ${DSU_BOLD}Options${DSU_RESET}
-  ${DSU_GREEN}--deep${DSU_RESET}          Add DNS AXFR/recursion checks, extended exposure paths,
-                  TLS cipher review and safe nmap web/TLS scripts when available.
-  ${DSU_GREEN}--authorized${DSU_RESET}    Confirm you are authorized to actively assess this target.
+  ${DSU_GREEN}--deep${DSU_RESET}          Add AXFR/recursion checks, broader TLS review and safe
+                  nmap HTTP/TLS scripts when available.
+  ${DSU_GREEN}--authorized${DSU_RESET}    Confirm authorization for active assessment.
                   Required for --deep and --ports.
-  ${DSU_GREEN}--ports${DSU_RESET}         With --deep, run an nmap top-100 TCP port inventory.
-  ${DSU_GREEN}--no-paths${DSU_RESET}      Skip accidental sensitive-path exposure checks.
-  ${DSU_GREEN}--port N${DSU_RESET}        HTTPS/TLS port (default: 443).
+  ${DSU_GREEN}--ports${DSU_RESET}         With --deep, add an nmap top-100 TCP port inventory.
+  ${DSU_GREEN}--no-paths${DSU_RESET}      Skip accidental sensitive-path probes.
+  ${DSU_GREEN}--port N${DSU_RESET}        HTTPS/TLS port ${DSU_GRAY}(default: 443)${DSU_RESET}.
   ${DSU_GREEN}--strict${DSU_RESET}        Exit non-zero when MEDIUM-or-higher findings exist.
   ${DSU_GREEN}--help, -h${DSU_RESET}      Show this help.
 
 ${DSU_BOLD}Severity model${DSU_RESET}
   ${DSU_RED}CRITICAL/HIGH${DSU_RESET}  Direct exposure, certificate identity failure, severe legacy crypto
   ${DSU_YELLOW}MEDIUM${DSU_RESET}         Material hardening gap or risky server behavior
-  ${DSU_MAGENTA}LOW${DSU_RESET}            Defense-in-depth / information exposure
-  ${DSU_CYAN}INFO${DSU_RESET}           Context or recommended hardening
+  ${DSU_MAGENTA}LOW${DSU_RESET}            Defense-in-depth or information exposure
+  ${DSU_CYAN}INFO${DSU_RESET}           Context and recommended hardening
 
-${DSU_BLUE}Examples${DSU_RESET}
-  dns-ssl-utilities.sh audit example.com
-  dns-ssl-utilities.sh a https://example.com
-  vulncheck example.com --deep --authorized
-  vulncheck example.com --deep --ports --authorized --strict
+${DSU_BOLD}Strict-mode exit codes${DSU_RESET}
+  ${DSU_GREEN}0${DSU_RESET}  Completed without MEDIUM+ strict findings
+  ${DSU_YELLOW}1${DSU_RESET}  Operational failure, or MEDIUM finding with --strict
+  ${DSU_RED}2${DSU_RESET}  Invalid usage, or HIGH/CRITICAL finding with --strict
 
-${DSU_YELLOW}Important:${DSU_RESET} only use deep/port scanning against systems you are authorized to test.
+${DSU_BOLD}Examples${DSU_RESET}
+  ${DSU_CYAN}vulncheck example.com${DSU_RESET}
+  ${DSU_CYAN}check audit https://example.com${DSU_RESET}
+  ${DSU_CYAN}vulncheck example.com --strict${DSU_RESET}
+  ${DSU_CYAN}vulncheck example.com --deep --authorized${DSU_RESET}
+  ${DSU_CYAN}vulncheck example.com --deep --ports --authorized${DSU_RESET}
+
+${DSU_YELLOW}Authorization:${DSU_RESET} only use deep or port scanning against systems you own or are explicitly authorized to assess.
 EOF_HELP
 }
 

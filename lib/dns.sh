@@ -6,63 +6,103 @@ _dsu_dns_usage() {
   cat <<EOF_HELP
 ${DSU_BOLD}${DSU_CYAN}DNS commands${DSU_RESET}
 
-${DSU_BOLD}Usage:${DSU_RESET}
-  dns-ssl-utilities.sh dns <command> [arguments]
-  dnsutil <command> [arguments]              ${DSU_GRAY}# after setup.sh${DSU_RESET}
+${DSU_BOLD}Usage${DSU_RESET}
+  ${DSU_GREEN}check dns${DSU_RESET} <command> [arguments]
+  ${DSU_GREEN}dnsutil${DSU_RESET} <command> [arguments]
 
-${DSU_GREEN}lookup, l${DSU_RESET}      Show A/AAAA/MX/NS/TXT/CAA/SOA records
-${DSU_GREEN}reverse, ptr, r${DSU_RESET} Reverse DNS for a host or IP
-${DSU_GREEN}mail, m${DSU_RESET}        SPF, DMARC, DKIM-selector and mail-policy checks
-${DSU_GREEN}dnssec, ds${DSU_RESET}     Inspect DNSSEC records and resolver validation
-${DSU_GREEN}trace, t${DSU_RESET}       Run a DNS delegation trace
-${DSU_GREEN}whois, w${DSU_RESET}       WHOIS summary for a domain
-${DSU_GREEN}hosting, host, h${DSU_RESET} Best-effort hosting/provider identification
+${DSU_GREEN}lookup, l${DSU_RESET}         Show useful DNS records or a specific record type
+${DSU_GREEN}reverse, ptr, r${DSU_RESET}  Reverse DNS / PTR for a host or IP
+${DSU_GREEN}mail, m${DSU_RESET}           SPF, DMARC, DKIM, MTA-STS and TLS-RPT checks
+${DSU_GREEN}dnssec, ds${DSU_RESET}        DNSSEC records and resolver validation
+${DSU_GREEN}trace, t${DSU_RESET}          Delegation trace from the DNS root
+${DSU_GREEN}whois, w${DSU_RESET}          Registrar, dates and domain-status summary
+${DSU_GREEN}hosting, h${DSU_RESET}        Best-effort hosting/provider identification
 
-${DSU_BLUE}Examples${DSU_RESET}
-  dns-ssl-utilities.sh dns lookup example.com
-  dns-ssl-utilities.sh dns l example.com A
-  dnsutil ptr 203.0.113.20
-  dnsutil mail example.com selector1
-  dnsutil dnssec example.com
+${DSU_BOLD}Examples${DSU_RESET}
+  ${DSU_CYAN}dnsutil l example.com${DSU_RESET}
+  ${DSU_CYAN}dnsutil lookup example.com MX${DSU_RESET}
+  ${DSU_CYAN}dnsutil r 203.0.113.20${DSU_RESET}
+  ${DSU_CYAN}dnsutil m example.com selector1${DSU_RESET}
+  ${DSU_CYAN}check dns dnssec example.com${DSU_RESET}
+  ${DSU_CYAN}check dns whois example.com${DSU_RESET}
+
+Run ${DSU_CYAN}check help dns <command>${DSU_RESET} or ${DSU_CYAN}dnsutil <command> --help${DSU_RESET} for command-specific help.
 EOF_HELP
 }
-
 
 _dsu_dns_leaf_help() {
   case "${1,,}" in
     lookup|look|resolve|records|l) _dsu_dns_lookup_help ;;
     reverse|ptr|rdns|r) cat <<EOF
-${DSU_BOLD}dns reverse${DSU_RESET} — PTR lookup
-Usage: dns reverse <domain-or-ip>
-Aliases: dns ptr, dns rdns, dns r
-A domain expands to all A and AAAA addresses before PTR lookup.
+${DSU_BOLD}DNS reverse / PTR${DSU_RESET}
+Usage: check dns reverse <domain-or-ip>
+Shortcut: dnsutil reverse <domain-or-ip>
+Aliases: reverse, ptr, rdns, r
+
+A domain expands to its A and AAAA addresses before PTR lookup.
+Real PTR answers, no-PTR responses and resolver/transport failures are reported separately.
 EOF
       ;;
     mail|email|m) cat <<EOF
-${DSU_BOLD}dns mail${DSU_RESET} — mail/authentication DNS posture
-Usage: dns mail <domain> [dkim-selector]
-Alias: dns m
+${DSU_BOLD}DNS mail policy${DSU_RESET}
+Usage: check dns mail <domain> [dkim-selector]
+Shortcut: dnsutil mail <domain> [dkim-selector]
+Alias: m
+
 Checks SPF, DMARC, CAA, MTA-STS, TLS-RPT and either a supplied DKIM selector
 or a curated set of common selectors.
 EOF
       ;;
-    dnssec|ds) printf '%b\n' "${DSU_BOLD}dns dnssec${DSU_RESET} — Usage: dns dnssec <domain>  (alias: dns ds)" ;;
-    trace|t) printf '%b\n' "${DSU_BOLD}dns trace${DSU_RESET} — Usage: dns trace <domain>  (alias: dns t)" ;;
-    whois|w) printf '%b\n' "${DSU_BOLD}dns whois${DSU_RESET} — Usage: dns whois <domain>  (alias: dns w)" ;;
-    hosting|host|provider|h) printf '%b\n' "${DSU_BOLD}dns hosting${DSU_RESET} — Usage: dns hosting <domain>  (alias: dns h)" ;;
+    dnssec|ds) cat <<EOF
+${DSU_BOLD}DNSSEC${DSU_RESET}
+Usage: check dns dnssec <domain>
+Shortcut: dnsutil dnssec <domain>
+Alias: ds
+
+Shows DNSKEY/DS posture and whether the configured resolver returned validation.
+EOF
+      ;;
+    trace|t) cat <<EOF
+${DSU_BOLD}DNS delegation trace${DSU_RESET}
+Usage: check dns trace <domain>
+Shortcut: dnsutil trace <domain>
+Alias: t
+
+Follows delegation from the DNS root to help diagnose parent/child nameserver issues.
+EOF
+      ;;
+    whois|w) cat <<EOF
+${DSU_BOLD}WHOIS / registrar${DSU_RESET}
+Usage: check dns whois <domain>
+Shortcut: dnsutil whois <domain>
+Alias: w
+
+Shows registrar, creation/expiry dates and domain status when the registry publishes them.
+Registrar parsing preserves the suite's conservative direct/multiline/handle WHOIS sequence.
+EOF
+      ;;
+    hosting|host|provider|h) cat <<EOF
+${DSU_BOLD}Hosting/provider identification${DSU_RESET}
+Usage: check dns hosting <domain>
+Shortcut: dnsutil hosting <domain>
+Aliases: hosting, host, provider, h
+
+Uses available DNS, address and hostname signals to make a best-effort provider guess.
+EOF
+      ;;
     *) _dsu_dns_usage ;;
   esac
 }
 
 _dsu_dns_lookup_help() {
   cat <<EOF_HELP
-${DSU_BOLD}dns lookup${DSU_RESET} — resolve useful DNS records
-
-Usage: dns lookup <domain> [TYPE]
-Aliases: dns l
+${DSU_BOLD}DNS lookup${DSU_RESET}
+Usage: check dns lookup <domain> [TYPE]
+Shortcut: dnsutil lookup <domain> [TYPE]
+Alias: l
 
 TYPE may be A, AAAA, MX, NS, TXT, CAA, SOA, CNAME, SRV, DS, DNSKEY or ALL.
-When omitted, a curated multi-record summary is shown.
+When TYPE is omitted, a curated multi-record summary is shown.
 EOF_HELP
 }
 
@@ -223,7 +263,7 @@ dsu_dns_lookup() {
 
 dsu_dns_reverse() {
   local input="${1:-}" host addresses line ptr soa tmp pid
-  [[ -n "$input" ]] || { dsu_bad "Usage: dns reverse <domain-or-ip>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check dns reverse <domain-or-ip> (or: dnsutil reverse <domain-or-ip>)"; return 2; }
   dsu_need dig dnsutils || return
   host=$(dsu_normalize_host "$input")
   dsu_section "Reverse DNS · $host"
@@ -277,7 +317,7 @@ dsu_dns_reverse() {
 
 dsu_dns_mail() {
   local input="${1:-}" selector="${2:-}" host spf dmarc caa mta tlsrpt dkim found=0 tmp pid
-  [[ -n "$input" ]] || { dsu_bad "Usage: dns mail <domain> [dkim-selector]"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check dns mail <domain> [dkim-selector] (or: dnsutil mail ...)"; return 2; }
   dsu_need dig dnsutils || return
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid domain: $input"; return 2; }
@@ -345,7 +385,7 @@ dsu_dns_mail() {
 
 dsu_dns_dnssec() {
   local input="${1:-}" host dnskey ds ad
-  [[ -n "$input" ]] || { dsu_bad "Usage: dns dnssec <domain>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check dns dnssec <domain> (or: dnsutil dnssec <domain>)"; return 2; }
   dsu_need dig dnsutils || return
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid domain: $input"; return 2; }
@@ -360,7 +400,7 @@ dsu_dns_dnssec() {
 
 dsu_dns_trace() {
   local input="${1:-}" host
-  [[ -n "$input" ]] || { dsu_bad "Usage: dns trace <domain>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check dns trace <domain> (or: dnsutil trace <domain>)"; return 2; }
   dsu_need dig dnsutils || return
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid domain: $input"; return 2; }
@@ -378,7 +418,7 @@ _dsu_whois_best() {
 
 dsu_dns_whois() {
   local input="${1:-}" host data registrar expiry created status nameservers
-  [[ -n "$input" ]] || { dsu_bad "Usage: dns whois <domain>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check dns whois <domain> (or: dnsutil whois <domain>)"; return 2; }
   dsu_need whois whois || return
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid domain: $input"; return 2; }
@@ -400,7 +440,7 @@ dsu_dns_whois() {
 
 dsu_dns_hosting() {
   local input="${1:-}"
-  [[ -n "$input" ]] || { dsu_bad "Usage: dns hosting <domain>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "Usage: check dns hosting <domain> (or: dnsutil hosting <domain>)"; return 2; }
   dsu_need python3 python3 || return
   dsu_section "Hosting/provider · $(dsu_normalize_host "$input")"
   python3 "$DSU_HOME/helpers/hosting_provider.py" "$input"

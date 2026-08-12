@@ -2,44 +2,44 @@
 
 _dsu_ssl_usage() {
   cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}SSL / certificate commands${DSU_RESET}
+${DSU_BOLD}${DSU_CYAN}SSL / TLS commands${DSU_RESET}
 
-${DSU_BOLD}Usage:${DSU_RESET}
-  dns-ssl-utilities.sh ssl <command> [arguments]
-  ssl <command> [arguments]                  ${DSU_GRAY}# after setup.sh${DSU_RESET}
+${DSU_BOLD}Usage${DSU_RESET}
+  ${DSU_GREEN}check ssl${DSU_RESET} <command> [arguments]
+  ${DSU_GREEN}ssl${DSU_RESET} <command> [arguments]
 
-${DSU_GREEN}cert, c${DSU_RESET}          Certificate identity, validity, SANs, key and fingerprint
-${DSU_GREEN}quick, q${DSU_RESET}         Compact certificate health line
-${DSU_GREEN}chain, ch${DSU_RESET}        Show the full server certificate chain
-${DSU_GREEN}fetch, f${DSU_RESET}         Test a domain against a specific IP/SNI endpoint
-${DSU_GREEN}versions, v${DSU_RESET}      Probe TLS protocol-version support
-${DSU_GREEN}ciphers, ci${DSU_RESET}      Enumerate accepted ciphers with sslscan/nmap
-${DSU_GREEN}scan, s${DSU_RESET}          Run sslscan directly when installed
-${DSU_GREEN}ocsp, o${DSU_RESET}          Check OCSP status using the served issuer certificate
-${DSU_GREEN}crl${DSU_RESET}              Check the leaf serial against its CRL distribution point
-${DSU_GREEN}ct, ctlogs${DSU_RESET}       Query Certificate Transparency names through crt.sh
-${DSU_GREEN}headers, h${DSU_RESET}       Inspect HTTPS security headers
-${DSU_GREEN}performance, perf${DSU_RESET} Benchmark TLS handshakes with openssl s_time
-${DSU_GREEN}fingerprint, fp${DSU_RESET}  Show/compare SHA-256 certificate fingerprint
+${DSU_GREEN}cert, c${DSU_RESET}             Certificate identity, validity, SANs, key and fingerprint
+${DSU_GREEN}quick, q${DSU_RESET}            Compact certificate health
+${DSU_GREEN}chain, ch${DSU_RESET}           Served certificate chain
+${DSU_GREEN}fetch, f${DSU_RESET}            Test a domain/SNI against a specific server IP
+${DSU_GREEN}versions, v${DSU_RESET}         TLS protocol-version support
+${DSU_GREEN}ciphers, ci${DSU_RESET}         Accepted cipher enumeration with sslscan/nmap
+${DSU_GREEN}scan, s${DSU_RESET}             Direct sslscan integration
+${DSU_GREEN}ocsp, o${DSU_RESET}             OCSP status
+${DSU_GREEN}crl${DSU_RESET}                 CRL revocation check
+${DSU_GREEN}ct, ctlogs${DSU_RESET}          Certificate Transparency names
+${DSU_GREEN}headers, h${DSU_RESET}          HTTPS security headers
+${DSU_GREEN}performance, perf${DSU_RESET}   TLS handshake benchmark
+${DSU_GREEN}fingerprint, fp${DSU_RESET}     SHA-256 fingerprint / pin comparison
 
-${DSU_MAGENTA}Certificate-file tools${DSU_RESET}
-${DSU_GREEN}decode, d${DSU_RESET}        Decode a certificate, CSR or key file
-${DSU_GREEN}match, m${DSU_RESET}         Verify cert/CSR/private-key public keys match
-${DSU_GREEN}new, n${DSU_RESET}           Create a private key and CSR with SAN support
-${DSU_GREEN}pack, pk${DSU_RESET}         Build a PFX/PKCS#12 bundle
-${DSU_GREEN}extract, x${DSU_RESET}       Extract cert/CA/key material from a PFX
+${DSU_BOLD}Certificate & key tools${DSU_RESET}
+${DSU_GREEN}decode, d${DSU_RESET}           Decode a certificate, CSR or private key
+${DSU_GREEN}match, m${DSU_RESET}            Verify cert/CSR/private-key public keys match
+${DSU_GREEN}new, n${DSU_RESET}              Create a private key + CSR + SANs
+${DSU_GREEN}pack, pk${DSU_RESET}            Create a PKCS#12/PFX bundle
+${DSU_GREEN}extract, x${DSU_RESET}          Extract certificate/CA/key material from PKCS#12/PFX
 
-${DSU_BLUE}Examples${DSU_RESET}
-  ssl cert example.com
-  ssl c example.com 8443
-  ssl fetch 203.0.113.10 example.com
-  ssl versions example.com
-  ssl match site.crt site.csr site.key
-  ssl new example.com --san www.example.com --san mail.example.com
-  ssl pack site.crt site.key chain.pem site.pfx
+${DSU_BOLD}Examples${DSU_RESET}
+  ${DSU_CYAN}ssl c example.com${DSU_RESET}
+  ${DSU_CYAN}ssl c example.com 8443${DSU_RESET}
+  ${DSU_CYAN}ssl fetch 203.0.113.10 example.com${DSU_RESET}
+  ${DSU_CYAN}ssl versions example.com${DSU_RESET}
+  ${DSU_CYAN}ssl match site.crt site.csr site.key${DSU_RESET}
+  ${DSU_CYAN}ssl new example.com --san www.example.com${DSU_RESET}
+
+Run ${DSU_CYAN}ssl <command> --help${DSU_RESET} or ${DSU_CYAN}check help ssl <command>${DSU_RESET} for command-specific help.
 EOF_HELP
 }
-
 
 _dsu_ssl_leaf_help() {
   local cmd="${1,,}"

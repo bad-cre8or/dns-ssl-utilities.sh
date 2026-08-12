@@ -20,9 +20,20 @@ pass 'shell/python syntax'
 
 help_out=$($SUITE --no-color --ascii --help)
 grep -q 'ssl cert, c' <<<"$help_out" || fail 'top-level help lacks ssl aliases'
-grep -q 'audit, a' <<<"$help_out" || fail 'top-level help lacks audit'
+grep -q 'check audit <target>' <<<"$help_out" || fail 'top-level help lacks audit'
 grep -q 'check.*<domain>' <<<"$help_out" || fail 'top-level help lacks primary check usage'
 $SUITE --no-color ssl cert --help | grep -q 'Usage: ssl cert' || fail 'leaf help'
+dns_help=$($SUITE --no-color --ascii dns --help)
+grep -q 'check dns.*<command>' <<<"$dns_help" || fail 'dns help does not advertise check dns'
+! grep -q 'dns-ssl-utilities.sh dns' <<<"$dns_help" || fail 'dns help advertises direct script as primary'
+ssl_help=$($SUITE --no-color --ascii ssl --help)
+grep -q 'check ssl.*<command>' <<<"$ssl_help" || fail 'ssl help does not advertise check ssl'
+audit_help=$($SUITE --no-color --ascii audit --help)
+grep -q 'check audit.*<domain-or-url>' <<<"$audit_help" || fail 'audit help does not advertise check audit'
+! grep -q 'dns-ssl-utilities.sh audit' <<<"$audit_help" || fail 'audit help advertises direct script as primary'
+! grep -q 'check help performance' <<<"$help_out" || fail 'top-level help still advertises performance tuning'
+! grep -q 'DSU_CHECK_DNS_TIMEOUT' <<<"$help_out" || fail 'top-level help exposes internal timeout knobs'
+! grep -q 'dsu check' <<<"$help_out" || fail 'top-level help still advertises dsu check'
 pass 'hierarchical help'
 
 mkdir -p "$TMP/files"; cd "$TMP/files"
