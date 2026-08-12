@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
 # Shared runtime helpers for dns-ssl-utilities.
 
-DSU_VERSION="2.2.0"
+DSU_VERSION="2.2.1"
 DSU_NAME="DNS + SSL Utilities"
 DSU_HOME="${DSU_HOME:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 DSU_CONNECT_TIMEOUT="${DSU_CONNECT_TIMEOUT:-4}"
 DSU_MAX_TIME="${DSU_MAX_TIME:-8}"
 DSU_DNS_TIMEOUT="${DSU_DNS_TIMEOUT:-2}"
 DSU_DNS_TRIES="${DSU_DNS_TRIES:-1}"
-DSU_WHOIS_TIMEOUT="${DSU_WHOIS_TIMEOUT:-7}"
+DSU_WHOIS_TIMEOUT="${DSU_WHOIS_TIMEOUT:-10}"
 # The everyday `check` path deliberately uses tighter deadlines than the
 # forensic subcommands. A support overview should feel instant; deeper commands
 # can afford to wait longer for reluctant remote services.
 DSU_CHECK_DNS_TIMEOUT="${DSU_CHECK_DNS_TIMEOUT:-1}"
 DSU_CHECK_CONNECT_TIMEOUT="${DSU_CHECK_CONNECT_TIMEOUT:-2}"
 DSU_CHECK_MAX_TIME="${DSU_CHECK_MAX_TIME:-4}"
-DSU_CHECK_WHOIS_TIMEOUT="${DSU_CHECK_WHOIS_TIMEOUT:-2}"
-DSU_CHECK_WHOIS_HANDLE_TIMEOUT="${DSU_CHECK_WHOIS_HANDLE_TIMEOUT:-1}"
+DSU_CHECK_WHOIS_TIMEOUT="${DSU_CHECK_WHOIS_TIMEOUT:-10}"
+DSU_CHECK_WHOIS_HANDLE_TIMEOUT="${DSU_CHECK_WHOIS_HANDLE_TIMEOUT:-10}"
 DSU_CHECK_PTR_TIMEOUT="${DSU_CHECK_PTR_TIMEOUT:-1}"
-DSU_REGISTRAR_CACHE_TTL="${DSU_REGISTRAR_CACHE_TTL:-21600}"
 DSU_USER_AGENT="${DSU_USER_AGENT:-dns-ssl-utilities/${DSU_VERSION}}"
 
 _dsu_color_enabled=1

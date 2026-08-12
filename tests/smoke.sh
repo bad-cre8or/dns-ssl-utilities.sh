@@ -71,18 +71,29 @@ dns_out=$(PATH="$TMP/mockbin:$PATH" $SUITE --no-color --ascii dns lookup example
 mail_out=$(PATH="$TMP/mockbin:$PATH" $SUITE --no-color --ascii dns mail example.test); grep -q 'DMARC policy: reject' <<<"$mail_out" || fail 'mail DNS mock'
 pass 'DNS routing/parsing'
 
-# Registrar regression: handle-based WHOIS must resolve to the human registrar
-# name, and dotted WHOIS field padding must parse correctly.
+# Registrar regression: preserve the proven WHOIS sequence exactly.
+# The mock timeout refuses anything except 10 seconds, so a future attempt to
+# "speed up" WHOIS by shrinking the guard will fail this test immediately.
 mkdir -p "$TMP/regbin"
-cat >"$TMP/regbin/dig" <<'MOCK'
+cat >"$TMP/regbin/timeout" <<'MOCK'
 #!/usr/bin/env bash
-if [[ " $* " == *" SOA "* && " $* " == *" +noall "* ]]; then
-  echo 'example.no. 60 IN SOA ns1.example.no. hostmaster.example.no. 1 2 3 4 5'
-fi
+[[ "${1:-}" == 10 ]] || { echo "unexpected WHOIS timeout: ${1:-}" >&2; exit 124; }
+shift
+exec "$@"
 MOCK
 cat >"$TMP/regbin/whois" <<'MOCK'
 #!/usr/bin/env bash
+printf '%s\n' "${1:-}" >>"${REG_WHOIS_LOG:?}"
 case "${1:-}" in
+  example.com)
+    echo 'Registrar: Key-Systems GmbH'
+    ;;
+  multiline.net)
+    cat <<'OUT'
+Registrar:
+  Example Multiline Registrar Ltd
+OUT
+    ;;
   example.no)
     cat <<'OUT'
 Domain Name................: example.no
@@ -92,12 +103,32 @@ OUT
   REG42-NORID)
     echo 'Registrar Name.............: Domeneshop AS'
     ;;
+  kommune.no)
+    echo 'Registrar: Kommune Registrar AS'
+    ;;
 esac
 MOCK
 chmod +x "$TMP/regbin/"*
-registrar_out=$(PATH="$TMP/regbin:$PATH" $SUITE --no-color --ascii dns whois example.no)
-grep -q 'Registrar.*Domeneshop' <<<"$registrar_out" || fail 'registrar handle/name WHOIS fallback'
-pass 'registrar WHOIS extraction'
+: >"$TMP/reg-whois.log"
+export REG_WHOIS_LOG="$TMP/reg-whois.log"
+
+registrar_direct=$(PATH="$TMP/regbin:$PATH" $SUITE --no-color --ascii dns whois www.example.com)
+grep -q 'Registrar.*Key-Systems GmbH' <<<"$registrar_direct" || fail 'direct Registrar field'
+[[ "$(head -1 "$REG_WHOIS_LOG")" == example.com ]] || fail 'subdomain WHOIS reduction'
+
+: >"$REG_WHOIS_LOG"
+registrar_multiline=$(PATH="$TMP/regbin:$PATH" $SUITE --no-color --ascii dns whois multiline.net)
+grep -q 'Registrar.*Example Multiline Registrar Ltd' <<<"$registrar_multiline" || fail 'multiline Registrar field'
+
+: >"$REG_WHOIS_LOG"
+registrar_handle=$(PATH="$TMP/regbin:$PATH" $SUITE --no-color --ascii dns whois example.no)
+grep -q 'Registrar.*REG42-NORID \[Domeneshop AS\]' <<<"$registrar_handle" || fail 'Registrar Handle -> Registrar Name fallback'
+grep -qx 'REG42-NORID' "$REG_WHOIS_LOG" || fail 'registrar handle WHOIS object lookup'
+
+# kommune.no was the explicit FQDN exception in the source logic.
+whois_domain=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/dns.sh"; _dsu_registrar_whois_domain "foo.oslo.kommune.no"' _ "$ROOT")
+[[ "$whois_domain" == foo.oslo.kommune.no ]] || fail 'kommune.no WHOIS exception'
+pass 'exact registrar WHOIS logic'
 
 # PTR regression: resolver transport failures are errors, never successful PTRs.
 mkdir -p "$TMP/ptrbin"

@@ -68,28 +68,21 @@ The fast overview uses tighter deadlines than the deeper subcommands:
 DSU_CHECK_DNS_TIMEOUT=1
 DSU_CHECK_CONNECT_TIMEOUT=2
 DSU_CHECK_MAX_TIME=4
-DSU_CHECK_WHOIS_TIMEOUT=2
-DSU_CHECK_WHOIS_HANDLE_TIMEOUT=1
+DSU_CHECK_WHOIS_TIMEOUT=10
+DSU_CHECK_WHOIS_HANDLE_TIMEOUT=10
 DSU_CHECK_PTR_TIMEOUT=1
-DSU_REGISTRAR_CACHE_TTL=21600   # 6 hours
 ```
 
 The normal DNS/HTTP/TLS subcommands retain more forgiving defaults. You can tune only the overview without changing the deeper tools:
 
 ```bash
-DSU_CHECK_MAX_TIME=6 DSU_CHECK_WHOIS_TIMEOUT=3 dsu check example.com
+DSU_CHECK_MAX_TIME=6 dsu check example.com
 ```
 
 For the lowest possible latency, skip reverse DNS for that invocation:
 
 ```bash
 dsu check example.com --no-rdns
-```
-
-Registrar names are cached briefly because registrars change far less often than DNS or HTTP state. Force a live WHOIS lookup with:
-
-```bash
-dsu check example.com --fresh
 ```
 
 `DSU_AUDIT_JOBS` separately controls bounded concurrency for the defensive exposure audit. The default of `4` is intentionally conservative.
@@ -276,7 +269,7 @@ dnsutil whois example.com
 dnsutil w example.com
 ```
 
-The registrar parser understands common WHOIS layouts, including padded fields such as `Registrar Name........:`, multi-line registrar fields, and registries that expose a registrar handle which must be resolved to the registrar name. The compact site overview places the registrar near the top of the report. 🧭
+Registrar detection uses a deliberately conservative WHOIS sequence: query the registrable domain with a 10-second guard, read `Registrar:` directly when present, handle multi-line `Registrar:` responses, then fall back to `Registrar Handle` and resolve `Registrar Name` with a second 10-second guard. The compact site overview places the registrar first. 🧭
 
 ---
 

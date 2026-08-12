@@ -90,71 +90,58 @@ _dsu_zone_apex_guess() {
   printf '%s' "${zone:-$host}"
 }
 
-_dsu_whois_first_value() {
-  local keys="$1"
-  awk -v keys="$keys" '
-    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
-    function norm(s) {
-      s=tolower(s)
-      gsub(/[._-]+/, " ", s)
-      gsub(/[[:space:]]+/, " ", s)
-      return trim(s)
-    }
-    BEGIN {
-      count=split(keys, wanted, "|")
-      for (i=1; i<=count; i++) wanted_map[norm(wanted[i])]=1
-    }
-    {
-      line=$0
-      sub(/\r$/, "", line)
-      if (waiting) {
-        candidate=trim(line)
-        if (candidate != "") { print candidate; exit }
-      }
-      colon=index(line, ":")
-      if (!colon) next
-      key=norm(substr(line, 1, colon-1))
-      if (!(key in wanted_map)) next
-      value=trim(substr(line, colon+1))
-      if (value != "") { print value; exit }
-      waiting=1
-    }
-  '
-}
+# Registrar logic preserved from the original check tool. This deliberately uses
+# its exact WHOIS-domain reduction and Registrar / multiline / Registrar Handle
+# fallback sequence because real registry WHOIS formats are inconsistent.
+_DSU_REGISTRAR_FQDN_EXCLUDE=("kommune.no")
 
-_dsu_registrar_pretty() {
-  local value
-  value=$(dsu_trim "$*")
-  # Present the recognizable registrar brand while keeping WHOIS as the source.
-  # This strips only common terminal legal-entity suffixes.
-  value=$(printf '%s\n' "$value" | sed -E '
-    s/[[:space:]]*,?[[:space:]]+(L\.?L\.?C\.?|INC\.?|INCORPORATED|LTD\.?|LIMITED|GMBH|AG|AS|ASA|S\.?A\.?|B\.?V\.?)[[:space:]]*$//I
-  ')
-  printf '%s' "$value"
-}
+_dsu_registrar_whois_domain() {
+  local domain=$1
+  local tld="${domain##*.}"
+  local without_tld="${domain%.*}"
+  local sld="${without_tld##*.}.$tld"
+  local excluded
 
-_dsu_whois_registrar() {
-  local data="$1" handle_timeout="${2:-$DSU_WHOIS_TIMEOUT}" value handle details
-  value=$(printf '%s\n' "$data" | _dsu_whois_first_value 'registrar|registrar name|sponsoring registrar|registrar organization|registrar organisation')
-  if [[ -n "$value" ]]; then
-    _dsu_registrar_pretty "$value"
-    return 0
-  fi
-
-  # Handle-based registries (notably NORID-style WHOIS) may return only a
-  # registrar object handle in the domain record. Resolve that object lazily,
-  # only when the direct registrar name was absent, so common lookups stay fast.
-  handle=$(printf '%s\n' "$data" | _dsu_whois_first_value 'registrar handle' || true)
-  [[ -n "$handle" ]] || return 1
-  if dsu_has whois; then
-    details=$(timeout "$handle_timeout" whois "$handle" 2>/dev/null || true)
-    value=$(printf '%s\n' "$details" | _dsu_whois_first_value 'registrar name|name|organization|organisation' || true)
-    if [[ -n "$value" ]]; then
-      _dsu_registrar_pretty "$value"
+  for excluded in "${_DSU_REGISTRAR_FQDN_EXCLUDE[@]}"; do
+    if [[ "$domain" == "$excluded" || "$domain" == *".$excluded" ]]; then
+      echo "$domain"
       return 0
     fi
+  done
+
+  echo "$sld"
+}
+
+_dsu_registrar_from_whois() {
+  local whois_cache="$1"
+  local registrar_result
+  registrar_result=$(echo "$whois_cache" | grep -E '^Registrar:' | sed 's/^Registrar: *//' | head -n1 | xargs)
+
+  if [[ -z "$registrar_result" ]]; then
+    registrar_result=$(echo "$whois_cache" | awk '
+      /^Registrar:/ { found=1; next }
+      found && /[^[:space:]]/ { print; exit }
+    ' | xargs)
   fi
-  printf '%s' "$handle"
+
+  local registrar_name=""
+  if [[ -z "$registrar_result" ]]; then
+    registrar_result=$(echo "$whois_cache" | grep -E 'Registrar Handle' | sed 's/.*: *//' | head -n1 | xargs)
+    if [[ -n "$registrar_result" ]]; then
+      registrar_name=$(timeout "$DSU_CHECK_WHOIS_HANDLE_TIMEOUT" whois "$registrar_result" 2>/dev/null \
+        | grep -i 'Registrar Name' | sed 's/.*: *//' | head -n1)
+    fi
+  fi
+
+  if [[ -n "$registrar_result" ]]; then
+    if [[ -n "$registrar_name" && "${registrar_result:0:3}" == "REG" ]]; then
+      printf '%s [%s]\n' "$registrar_result" "$registrar_name"
+    else
+      printf '%s\n' "$registrar_result"
+    fi
+    return 0
+  fi
+  return 1
 }
 
 _dsu_ptr_probe() {
@@ -384,8 +371,8 @@ dsu_dns_trace() {
 
 _dsu_whois_best() {
   local host="$1" candidate data
-  candidate=$(_dsu_zone_apex_guess "$host")
-  data=$(timeout "$DSU_WHOIS_TIMEOUT" whois "$candidate" 2>/dev/null || true)
+  candidate=$(_dsu_registrar_whois_domain "$host")
+  data=$(timeout "$DSU_CHECK_WHOIS_TIMEOUT" whois "$candidate" 2>/dev/null || true)
   printf '%s' "$data"
 }
 
@@ -398,7 +385,7 @@ dsu_dns_whois() {
   dsu_section "WHOIS · $host"
   data=$(_dsu_whois_best "$host")
   [[ -n "$data" ]] || { dsu_warn "No WHOIS data returned"; return 1; }
-  registrar=$(_dsu_whois_registrar "$data" || true)
+  registrar=$(_dsu_registrar_from_whois "$data" || true)
   expiry=$(printf '%s\n' "$data" | grep -iE '^(Registry Expiry Date|Registrar Registration Expiration Date|Expiry Date|Expiration Date|paid-till):' | head -1 | sed 's/^[^:]*:[[:space:]]*//')
   created=$(printf '%s\n' "$data" | grep -iE '^(Creation Date|Created On|created):' | head -1 | sed 's/^[^:]*:[[:space:]]*//')
   status=$(printf '%s\n' "$data" | grep -iE '^(Domain Status|Status):' | head -6 | sed 's/^[^:]*:[[:space:]]*//' | paste -sd ', ' -)

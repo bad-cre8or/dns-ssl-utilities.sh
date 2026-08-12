@@ -87,6 +87,7 @@ ${DSU_BOLD}Global options${DSU_RESET}
 ${DSU_BOLD}Performance tuning${DSU_RESET}
   ${DSU_GREEN}DSU_CHECK_DNS_TIMEOUT${DSU_RESET} Fast-check DNS timeout ${DSU_GRAY}(default: $DSU_CHECK_DNS_TIMEOUT)${DSU_RESET}
   ${DSU_GREEN}DSU_CHECK_MAX_TIME${DSU_RESET}    Fast-check HTTP/TLS ceiling ${DSU_GRAY}(default: ${DSU_CHECK_MAX_TIME}s)${DSU_RESET}
+  ${DSU_GREEN}DSU_CHECK_WHOIS_TIMEOUT${DSU_RESET} Fast-check WHOIS guard ${DSU_GRAY}(default: ${DSU_CHECK_WHOIS_TIMEOUT}s)${DSU_RESET}
   ${DSU_GREEN}DSU_DNS_TIMEOUT${DSU_RESET}      DNS retry timeout in seconds ${DSU_GRAY}(default: $DSU_DNS_TIMEOUT)${DSU_RESET}
   ${DSU_GREEN}DSU_DNS_TRIES${DSU_RESET}        DNS attempts per query ${DSU_GRAY}(default: $DSU_DNS_TRIES)${DSU_RESET}
   ${DSU_GREEN}DSU_CONNECT_TIMEOUT${DSU_RESET}  HTTP connect timeout ${DSU_GRAY}(default: $DSU_CONNECT_TIMEOUT)${DSU_RESET}
@@ -135,7 +136,7 @@ dsu_doctor() {
   dsu_section "Network tuning"
   dsu_keyval "Fast check DNS" "${DSU_CHECK_DNS_TIMEOUT}s"
   dsu_keyval "Fast check HTTP/TLS" "${DSU_CHECK_MAX_TIME}s max"
-  dsu_keyval "Registrar cache" "${DSU_REGISTRAR_CACHE_TTL}s"
+  dsu_keyval "Fast check WHOIS" "${DSU_CHECK_WHOIS_TIMEOUT}s"
   dsu_keyval "DNS timeout" "${DSU_DNS_TIMEOUT}s × ${DSU_DNS_TRIES} try/tries"
   dsu_keyval "Connect timeout" "${DSU_CONNECT_TIMEOUT}s"
   dsu_keyval "General max time" "${DSU_MAX_TIME}s"

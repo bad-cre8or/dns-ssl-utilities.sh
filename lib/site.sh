@@ -17,7 +17,6 @@ ${DSU_BLUE}Examples${DSU_RESET}
   sitecheck example.com
   dsu check example.com
   dsu check example.com --no-rdns
-  dsu check example.com --fresh
   dns-ssl-utilities.sh site redirects http://example.com
 EOF_HELP
 }
@@ -26,7 +25,7 @@ _dsu_site_leaf_help() {
   case "${1,,}" in
     check|c|full) cat <<EOF
 ${DSU_BOLD}site check${DSU_RESET} — fast operational domain summary
-Usage: site check <domain> [--no-rdns] [--fresh]
+Usage: site check <domain> [--no-rdns]
 Alias: site c
 
 The default path is intentionally lean: registrar, useful DNS records, DNSSEC,
@@ -35,7 +34,6 @@ It does not run the vulnerability audit or heavyweight TLS scans.
 
 Options:
   --no-rdns  Skip PTR checks for the lowest possible latency
-  --fresh    Ignore the short-lived registrar cache and query WHOIS now
 EOF
       ;;
     headers|header|h) printf '%b\n' "${DSU_BOLD}site headers${DSU_RESET} — Usage: site headers <domain-or-url>  (alias: site h)" ;;
@@ -94,53 +92,29 @@ _dsu_site_provider_guess() {
   printf 'Unknown'
 }
 
-_dsu_site_registrar_cache_path() {
-  local host="$1"
-  printf '%s/dns-ssl-utilities/registrar/%s' "${XDG_CACHE_HOME:-$HOME/.cache}" "$host"
-}
-
-_dsu_site_registrar_cache_get() {
-  local host="$1" path now modified age
-  path=$(_dsu_site_registrar_cache_path "$host")
-  [[ -s "$path" ]] || return 1
-  modified=$(stat -c '%Y' "$path" 2>/dev/null) || return 1
-  now=$(date +%s)
-  age=$(( now - modified ))
-  (( age >= 0 && age <= DSU_REGISTRAR_CACHE_TTL )) || return 1
-  head -1 "$path"
-}
-
-_dsu_site_registrar_cache_put() {
-  local host="$1" registrar="$2" path
-  [[ -n "$registrar" ]] || return 0
-  path=$(_dsu_site_registrar_cache_path "$host")
-  mkdir -p -- "$(dirname -- "$path")" 2>/dev/null || return 0
-  printf '%s\n' "$registrar" >"$path" 2>/dev/null || true
-}
-
 _dsu_site_registrar_probe() {
-  local host="$1" fresh="${2:-0}" cached data registrar rc
-  if (( ! fresh )) && cached=$(_dsu_site_registrar_cache_get "$host" 2>/dev/null); then
-    printf 'OK\t%s\n' "$cached"
-    return 0
-  fi
+  local host="$1"
+  local main_domain whois_cache registrar_result rc
+
   if ! dsu_has whois; then
     printf 'ERROR\twhois not installed\n'
     return 0
   fi
 
-  data=$(timeout "$DSU_CHECK_WHOIS_TIMEOUT" whois "$host" 2>/dev/null)
+  # Use the registrar path preserved verbatim from check.zip in lib/dns.sh.
+  main_domain=$(_dsu_registrar_whois_domain "$host")
+  whois_cache=$(timeout "$DSU_CHECK_WHOIS_TIMEOUT" whois "$main_domain" 2>/dev/null)
   rc=$?
-  registrar=$(_dsu_whois_registrar "$data" "$DSU_CHECK_WHOIS_HANDLE_TIMEOUT" 2>/dev/null || true)
-  if [[ -n "$registrar" ]]; then
-    _dsu_site_registrar_cache_put "$host" "$registrar"
-    printf 'OK\t%s\n' "$registrar"
+  registrar_result=$(_dsu_registrar_from_whois "$whois_cache" || true)
+
+  if [[ -n "$registrar_result" ]]; then
+    printf 'OK\t%s\n' "$registrar_result"
   elif (( rc == 124 )); then
-    printf 'ERROR\tWHOIS timed out\n'
-  elif [[ -z "$data" ]]; then
-    printf 'ERROR\tWHOIS returned no data\n'
+    printf 'ERROR\tWHOIS timed out after %ss\n' "$DSU_CHECK_WHOIS_TIMEOUT"
+  elif [[ -z "$whois_cache" ]]; then
+    printf 'ERROR\tWHOIS returned no data for %s\n' "$main_domain"
   else
-    printf 'NONE\tRegistrar not identified\n'
+    printf 'NONE\tNo registrar information found for %s\n' "$main_domain"
   fi
 }
 
@@ -190,13 +164,13 @@ _dsu_site_print_http_code() {
 }
 
 dsu_site_check() {
-  local input="${1:-}" host tmp no_rdns=0 fresh=0
-  [[ -n "$input" ]] || { dsu_bad "Usage: site check <domain> [--no-rdns] [--fresh]"; return 2; }
+  local input="${1:-}" host tmp no_rdns=0
+  [[ -n "$input" ]] || { dsu_bad "Usage: site check <domain> [--no-rdns]"; return 2; }
   shift || true
   while (( $# )); do
     case "$1" in
       --no-rdns|--no-ptr) no_rdns=1 ;;
-      --fresh) fresh=1 ;;
+      --fresh) ;; # accepted for backward compatibility; registrar data is no longer cached
       -h|--help) _dsu_site_leaf_help check; return 0 ;;
       *) dsu_bad "Unknown check option: $1"; return 2 ;;
     esac
@@ -226,7 +200,7 @@ dsu_site_check() {
   (dig +time="$DSU_CHECK_DNS_TIMEOUT" +tries=1 A "$host" +dnssec 2>/dev/null || true) >"$tmp/dnssec" & pid_dnssec=$!
 
   local pid_whois pid_http pid_https
-  (_dsu_site_registrar_probe "$host" "$fresh") >"$tmp/registrar" & pid_whois=$!
+  (_dsu_site_registrar_probe "$host") >"$tmp/registrar" & pid_whois=$!
   (_dsu_site_curl_probe http "$host" "$tmp/http" || true) & pid_http=$!
   (_dsu_site_curl_probe https "$host" "$tmp/https" || true) & pid_https=$!
 
