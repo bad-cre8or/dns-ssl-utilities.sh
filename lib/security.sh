@@ -41,22 +41,50 @@ EOF_HELP
 }
 
 _dsu_audit_dns() {
-  local host="$1" dnskey ds caa mx spf dmarc cname cname_target cname_status spf_count dmarc_count mx_target mx_cname
+  local host="$1" tmp pid cname cname_target cname_status dnskey ds caa mx spf dmarc spf_count dmarc_count
   dsu_section "DNS + domain policy"
-  cname=$(_dsu_dig_lines CNAME "$host" | head -1)
+  tmp=$(dsu_tmpdir) || return 1
+
+  local -a pids=()
+  (_dsu_dig_lines CNAME "$host") >"$tmp/cname" & pids+=("$!")
+  (_dsu_dig_lines DNSKEY "$host") >"$tmp/dnskey" & pids+=("$!")
+  (_dsu_dig_lines DS "$host") >"$tmp/ds" & pids+=("$!")
+  (_dsu_dig_lines CAA "$host") >"$tmp/caa" & pids+=("$!")
+  (_dsu_dig_lines MX "$host") >"$tmp/mx" & pids+=("$!")
+  (_dsu_dig_lines TXT "$host") >"$tmp/txt" & pids+=("$!")
+  (_dsu_dig_lines TXT "_dmarc.$host") >"$tmp/dmarc" & pids+=("$!")
+  (dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" A "$host" +dnssec 2>/dev/null || true) >"$tmp/dnssec" & pids+=("$!")
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+
+  cname=$(head -1 "$tmp/cname" 2>/dev/null || true)
+  dnskey=$(cat "$tmp/dnskey" 2>/dev/null || true)
+  ds=$(cat "$tmp/ds" 2>/dev/null || true)
+  caa=$(cat "$tmp/caa" 2>/dev/null || true)
+  mx=$(cat "$tmp/mx" 2>/dev/null || true)
+  spf_count=$(tr -d '"' <"$tmp/txt" | grep -ic '^v=spf1' || true)
+  dmarc_count=$(tr -d '"' <"$tmp/dmarc" | grep -ic '^v=DMARC1' || true)
+  spf=$(tr -d '"' <"$tmp/txt" | grep -i '^v=spf1' | head -1)
+  dmarc=$(tr -d '"' <"$tmp/dmarc" | grep -i '^v=DMARC1' | head -1)
+
   if [[ -n "$cname" ]]; then
     cname_target="${cname%.}"
-    cname_status=$(dig A "$cname_target" +noall +comments 2>/dev/null || true)
-    if [[ -z "$(_dsu_dig_lines A "$cname_target")$(_dsu_dig_lines AAAA "$cname_target")$(_dsu_dig_lines CNAME "$cname_target")" ]] && [[ "$cname_status" == *'status: NXDOMAIN'* ]]; then
+    local p1 p2 p3 p4 target_records
+    (dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" A "$cname_target" +noall +comments 2>/dev/null || true) >"$tmp/cname.status" & p1=$!
+    (_dsu_dig_lines A "$cname_target") >"$tmp/cname.a" & p2=$!
+    (_dsu_dig_lines AAAA "$cname_target") >"$tmp/cname.aaaa" & p3=$!
+    (_dsu_dig_lines CNAME "$cname_target") >"$tmp/cname.cname" & p4=$!
+    wait "$p1" 2>/dev/null || true; wait "$p2" 2>/dev/null || true; wait "$p3" 2>/dev/null || true; wait "$p4" 2>/dev/null || true
+    cname_status=$(cat "$tmp/cname.status" 2>/dev/null || true)
+    target_records=$(cat "$tmp/cname.a" "$tmp/cname.aaaa" "$tmp/cname.cname" 2>/dev/null || true)
+    if [[ -z "$target_records" && "$cname_status" == *'status: NXDOMAIN'* ]]; then
       dsu_finding HIGH "CNAME points to NXDOMAIN target $cname_target; investigate dangling-DNS/subdomain-takeover risk"
     else
       dsu_finding INFO "CNAME target: $cname_target"
     fi
   fi
-  dnskey=$(_dsu_dig_lines DNSKEY "$host")
-  ds=$(_dsu_dig_lines DS "$host")
+
   if [[ -n "$dnskey" && -n "$ds" ]]; then
-    if dig A "$host" +dnssec 2>/dev/null | grep -q 'flags:.* ad[; ]'; then dsu_finding INFO "DNSSEC chain is present and validated by the configured resolver"
+    if grep -q 'flags:.* ad[; ]' "$tmp/dnssec" 2>/dev/null; then dsu_finding INFO "DNSSEC chain is present and validated by the configured resolver"
     else dsu_finding MEDIUM "DNSSEC records exist but the resolver did not return an AD validation flag"; fi
   elif [[ -n "$dnskey" || -n "$ds" ]]; then
     dsu_finding MEDIUM "DNSSEC appears partially configured (DNSKEY/DS mismatch)"
@@ -64,30 +92,32 @@ _dsu_audit_dns() {
     dsu_finding LOW "DNSSEC is not published"
   fi
 
-  caa=$(_dsu_dig_lines CAA "$host")
   [[ -n "$caa" ]] && dsu_finding INFO "CAA restricts certificate issuance: $(printf '%s' "$caa" | paste -sd ', ' -)" || dsu_finding LOW "CAA is absent; any publicly trusted CA permitted by policy may issue"
 
-  mx=$(_dsu_dig_lines MX "$host")
-  spf_count=$(_dsu_dig_lines TXT "$host" | tr -d '"' | grep -ic '^v=spf1' || true)
-  dmarc_count=$(_dsu_dig_lines TXT "_dmarc.$host" | tr -d '"' | grep -ic '^v=DMARC1' || true)
-  spf=$(_dsu_dig_lines TXT "$host" | tr -d '"' | grep -i '^v=spf1' | head -1)
-  dmarc=$(_dsu_dig_lines TXT "_dmarc.$host" | tr -d '"' | grep -i '^v=DMARC1' | head -1)
   if [[ -n "$mx" ]]; then
     [[ -n "$spf" ]] || dsu_finding MEDIUM "Domain has MX records but no SPF policy was found"
     [[ -n "$dmarc" ]] || dsu_finding MEDIUM "Domain has MX records but no DMARC policy was found"
+    local -a mx_targets=() mx_pids=()
+    local _ mx_target idx=0 mx_cname
     while read -r _ mx_target; do
       [[ -n "${mx_target:-}" ]] || continue
       mx_target="${mx_target%.}"
-      mx_cname=$(_dsu_dig_lines CNAME "$mx_target" | head -1)
-      [[ -n "$mx_cname" ]] && dsu_finding MEDIUM "MX target $mx_target is a CNAME ($mx_cname); MX targets should resolve directly"
+      mx_targets+=("$mx_target"); ((idx+=1))
+      (_dsu_dig_lines CNAME "$mx_target") >"$tmp/mx_cname.$idx" & mx_pids+=("$!")
     done <<< "$mx"
+    for pid in "${mx_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+    idx=0
+    for mx_target in "${mx_targets[@]}"; do
+      ((idx+=1)); mx_cname=$(head -1 "$tmp/mx_cname.$idx" 2>/dev/null || true)
+      [[ -n "$mx_cname" ]] && dsu_finding MEDIUM "MX target $mx_target is a CNAME ($mx_cname); MX targets should resolve directly"
+    done
   fi
   (( spf_count > 1 )) && dsu_finding HIGH "Multiple SPF records were found; SPF requires one policy record"
   (( dmarc_count > 1 )) && dsu_finding MEDIUM "Multiple DMARC records were found; DMARC expects one policy record"
   [[ "$spf" == *'+all'* ]] && dsu_finding HIGH "SPF contains +all, effectively authorizing arbitrary senders"
   if [[ "$dmarc" =~ (^|[;[:space:]])p=none([;[:space:]]|$) ]]; then dsu_finding LOW "DMARC is monitoring-only (p=none)"; fi
+  dsu_cleanup_dir "$tmp"
 }
-
 _dsu_audit_tls() {
   local host="$1" port="$2" deep="$3" tmp conn verify end days sig text bits keytype stapling compression alpn
   dsu_section "TLS + certificate"
@@ -119,14 +149,17 @@ _dsu_audit_tls() {
   keytype=$(printf '%s\n' "$text" | awk -F': ' '/Public Key Algorithm:/ {print $2; exit}')
   if [[ "$keytype" == *rsaEncryption* && "$bits" =~ ^[0-9]+$ && "$bits" -lt 2048 ]]; then dsu_finding HIGH "RSA public key is only $bits bits"; elif [[ -n "$bits" ]]; then dsu_finding INFO "Public key: ${keytype:-unknown}, $bits bits"; fi
 
-  local label flag
+  local label flag openssl_help pid_stapling
+  local -a proto_flags=() proto_labels=() proto_pids=()
+  openssl_help=$(openssl s_client -help 2>&1 || true)
+  local proto_i=0
   while IFS=$'\t' read -r flag label; do
-    if openssl s_client -help 2>&1 | grep -q -- "$flag" && _dsu_tls_probe "$flag" "$host" "$port"; then
-      case "$flag" in
-        -ssl3) dsu_finding HIGH "$label is accepted" ;;
-        -tls1|-tls1_1) dsu_finding MEDIUM "$label is accepted; disable legacy TLS where possible" ;;
-        *) dsu_finding INFO "$label is accepted" ;;
-      esac
+    if grep -q -- "$flag" <<< "$openssl_help"; then
+      proto_flags+=("$flag")
+      proto_labels+=("$label")
+      ((proto_i+=1))
+      (_dsu_tls_probe "$flag" "$host" "$port" && printf 'yes') >"$tmp/proto.$proto_i" &
+      proto_pids+=("$!")
     fi
   done <<'VERSIONS'
 -ssl3	SSLv3
@@ -136,13 +169,31 @@ _dsu_audit_tls() {
 -tls1_3	TLSv1.3
 VERSIONS
 
+  (timeout "$DSU_MAX_TIME" openssl s_client -status -servername "$host" -connect "$host:$port" </dev/null 2>/dev/null \
+    | awk '/OCSP response:/ {sub(/^.*OCSP response:[[:space:]]*/, ""); print; exit}' || true) >"$tmp/stapling" &
+  pid_stapling=$!
+
+  for pid in "${proto_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  proto_i=0
+  for flag in "${proto_flags[@]}"; do
+    label="${proto_labels[$proto_i]}"
+    ((proto_i+=1))
+    if [[ -s "$tmp/proto.$proto_i" ]]; then
+      case "$flag" in
+        -ssl3) dsu_finding HIGH "$label is accepted" ;;
+        -tls1|-tls1_1) dsu_finding MEDIUM "$label is accepted; disable legacy TLS where possible" ;;
+        *) dsu_finding INFO "$label is accepted" ;;
+      esac
+    fi
+  done
+
   compression=$(printf '%s\n' "$conn" | awk -F': ' '/^Compression:/ {print $2; exit}')
   if [[ -n "$compression" && "${compression^^}" != "NONE" ]]; then dsu_finding HIGH "TLS compression is enabled ($compression), exposing CRIME-style risk"; elif [[ -n "$compression" ]]; then dsu_finding INFO "TLS compression: $compression"; fi
   alpn=$(printf '%s\n' "$conn" | sed -n 's/^ALPN protocol: //p' | head -1)
   [[ -n "$alpn" ]] && dsu_finding INFO "ALPN negotiated: $alpn"
-  stapling=$(timeout "$DSU_MAX_TIME" openssl s_client -status -servername "$host" -connect "$host:$port" </dev/null 2>/dev/null | awk '/OCSP response:/ {sub(/^.*OCSP response:[[:space:]]*/, ""); print; exit}')
+  wait "$pid_stapling" 2>/dev/null || true
+  stapling=$(cat "$tmp/stapling" 2>/dev/null || true)
   if [[ "$stapling" == *'no response sent'* || -z "$stapling" ]]; then dsu_finding INFO "OCSP stapling was not observed (not universally required)"; else dsu_finding INFO "OCSP stapling response was presented"; fi
-
   if (( deep )); then
     if dsu_has sslscan; then
       local scan weak
@@ -210,19 +261,31 @@ _dsu_audit_headers() {
 }
 
 _dsu_audit_http_behavior() {
-  local host="$1" port="$2" base="https://$host" http_headers location code trace options allow cors_headers acao acac html cookies cookie name
+  local host="$1" port="$2" base="https://$host" tmp pid
+  local http_headers location code trace options allow cors_headers acao acac html cookies cookie name
   [[ "$port" != 443 ]] && base="https://$host:$port"
   dsu_section "HTTP behavior + browser-facing controls"
+  tmp=$(dsu_tmpdir) || return 1
 
-  http_headers=$(dsu_http_headers "http://$host/")
+  local -a pids=()
+  (dsu_http_headers "http://$host/" || true) >"$tmp/http" & pids+=("$!")
+  (dsu_http_status "$base/" -X TRACE || true) >"$tmp/trace" & pids+=("$!")
+  (dsu_http_headers "$base/" -X OPTIONS || true) >"$tmp/options" & pids+=("$!")
+  (dsu_http_headers "$base/" -H 'Origin: https://dns-ssl-utilities.invalid' || true) >"$tmp/cors" & pids+=("$!")
+  (dsu_http_headers "$base/" || true) >"$tmp/root_headers" & pids+=("$!")
+  (curl -ksS --compressed --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" --max-filesize 1048576 -A "$DSU_USER_AGENT" "$base/" 2>/dev/null | head -c 1048576 || true) >"$tmp/html" & pids+=("$!")
+  (dsu_http_status "$base/.well-known/security.txt" || true) >"$tmp/securitytxt" & pids+=("$!")
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+
+  http_headers=$(cat "$tmp/http" 2>/dev/null || true)
   location=$(dsu_header_value "$http_headers" location)
-  code=$(printf '%s\n' "$http_headers" | awk '/^HTTP\// {c=$2} END{print c}')
+  code=$(dsu_http_code_from_headers "$http_headers")
   if [[ "$location" == https://* ]]; then dsu_finding INFO "Plain HTTP redirects to HTTPS ($code → $location)"; else dsu_finding MEDIUM "Plain HTTP does not clearly redirect to HTTPS${location:+ (Location: $location)}"; fi
 
-  trace=$(dsu_http_status "$base/" -X TRACE)
+  trace=$(cat "$tmp/trace" 2>/dev/null || printf '000')
   [[ "$trace" == 200 ]] && dsu_finding MEDIUM "HTTP TRACE is enabled (HTTP 200)" || dsu_finding INFO "HTTP TRACE not accepted (status $trace)"
 
-  options=$(dsu_http_headers "$base/" -X OPTIONS)
+  options=$(cat "$tmp/options" 2>/dev/null || true)
   allow=$(dsu_header_value "$options" allow)
   if [[ -n "$allow" ]]; then
     dsu_finding INFO "Allow header: $allow"
@@ -231,7 +294,7 @@ _dsu_audit_http_behavior() {
     [[ "${allow^^}" == *PUT* || "${allow^^}" == *DELETE* ]] && dsu_finding LOW "State-changing methods are advertised; verify authorization controls: $allow"
   fi
 
-  cors_headers=$(dsu_http_headers "$base/" -H 'Origin: https://dns-ssl-utilities.invalid')
+  cors_headers=$(cat "$tmp/cors" 2>/dev/null || true)
   acao=$(dsu_header_value "$cors_headers" access-control-allow-origin)
   acac=$(dsu_header_value "$cors_headers" access-control-allow-credentials)
   if [[ "$acao" == 'https://dns-ssl-utilities.invalid' && "${acac,,}" == true ]]; then
@@ -246,7 +309,7 @@ _dsu_audit_http_behavior() {
     dsu_finding INFO "No obviously permissive CORS behavior observed on /"
   fi
 
-  cookies=$(dsu_header_values "$(dsu_http_headers "$base/")" set-cookie)
+  cookies=$(dsu_header_values "$(cat "$tmp/root_headers" 2>/dev/null || true)" set-cookie)
   if [[ -n "$cookies" ]]; then
     while IFS= read -r cookie; do
       name=${cookie%%=*}
@@ -262,7 +325,7 @@ _dsu_audit_http_behavior() {
     dsu_finding INFO "No Set-Cookie headers observed on /"
   fi
 
-  html=$(curl -ksS --compressed --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" --max-filesize 1048576 -A "$DSU_USER_AGENT" "$base/" 2>/dev/null | head -c 1048576 || true)
+  html=$(cat "$tmp/html" 2>/dev/null || true)
   if [[ -n "$html" ]]; then
     if printf '%s' "$html" | grep -Eqi "<(script|img|iframe|link|form)[^>]+(src|href|action)=[\"']http://"; then dsu_finding MEDIUM "HTTPS page contains active/passive mixed-content HTTP references"; else dsu_finding INFO "No obvious http:// mixed-content references found in the first 1 MiB"; fi
     if printf '%s' "$html" | grep -Eqi "<input[^>]+type=[\"']?password"; then
@@ -271,13 +334,13 @@ _dsu_audit_http_behavior() {
     printf '%s' "$html" | grep -Eqi '<title>[[:space:]]*Index of /' && dsu_finding LOW "Root page appears to expose a directory listing"
   fi
 
-  code=$(dsu_http_status "$base/.well-known/security.txt")
+  code=$(cat "$tmp/securitytxt" 2>/dev/null || printf '000')
   [[ "$code" == 200 ]] && dsu_finding INFO "security.txt is published" || dsu_finding INFO "security.txt not found (status $code)"
+  dsu_cleanup_dir "$tmp"
 }
-
-_dsu_probe_path() {
+_dsu_probe_path_result() {
   local base="$1" path="$2" marker="$3" severity="$4" description="$5" tmp status ctype
-  tmp=$(mktemp)
+  tmp=$(mktemp) || return 1
   local raw_status rc
   raw_status=$(curl -ksS --range 0-65535 --max-filesize 1048576 --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" -A "$DSU_USER_AGENT" \
     -o "$tmp" -w '%{http_code}' "$base$path" 2>/dev/null)
@@ -285,40 +348,77 @@ _dsu_probe_path() {
   if [[ "$raw_status" =~ ([0-9]{3})$ ]]; then status="${BASH_REMATCH[1]}"; elif (( rc != 0 )); then status=000; else status="${raw_status:-000}"; fi
   if [[ "$status" == 200 || "$status" == 206 ]]; then
     if [[ -n "$marker" ]] && grep -Eqi "$marker" "$tmp" 2>/dev/null; then
-      dsu_finding "$severity" "$description exposed at $path"
+      printf '%s\t%s\n' "$severity" "$description exposed at $path"
     elif [[ "$path" == *.zip || "$path" == *.tar.gz || "$path" == *.sql ]]; then
       ctype=$(file -b "$tmp" 2>/dev/null || true)
-      if [[ "$ctype" == *Zip* || "$ctype" == *SQL* || "$ctype" == *archive* ]]; then dsu_finding "$severity" "$description may be exposed at $path ($ctype)"; fi
+      if [[ "$ctype" == *Zip* || "$ctype" == *SQL* || "$ctype" == *archive* ]]; then printf '%s\t%s\n' "$severity" "$description may be exposed at $path ($ctype)"; fi
     fi
   elif [[ "$status" == 403 ]]; then
-    dsu_finding INFO "$path exists or is filtered (403); access was denied"
+    printf 'INFO\t%s\n' "$path exists or is filtered (403); access was denied"
   fi
   rm -f "$tmp"
 }
 
 _dsu_audit_paths() {
-  local host="$1" port="$2" deep="$3" base="https://$host"
+  local host="$1" port="$2" deep="$3" base="https://$host" tmp jobs idx pid sev msg
   [[ "$port" != 443 ]] && base="https://$host:$port"
   dsu_section "Accidental exposure paths"
-  _dsu_probe_path "$base" '/.git/HEAD' '^ref: refs/' HIGH 'Git repository metadata'
-  _dsu_probe_path "$base" '/.env' '(^|\n)(APP_KEY|DB_PASSWORD|DATABASE_URL|AWS_SECRET_ACCESS_KEY|SECRET_KEY)=' CRITICAL 'Environment secrets'
-  _dsu_probe_path "$base" '/server-status' 'Apache Server Status|Server Version:' MEDIUM 'Apache server-status'
-  _dsu_probe_path "$base" '/phpinfo.php' 'phpinfo\(\)|PHP Version' HIGH 'phpinfo output'
-  _dsu_probe_path "$base" '/wp-config.php.bak' 'DB_(NAME|USER|PASSWORD)' HIGH 'WordPress configuration backup'
-  _dsu_probe_path "$base" '/actuator/env' 'propertySources|activeProfiles|systemProperties' HIGH 'Spring Boot actuator environment'
-  if (( deep )); then
-    _dsu_probe_path "$base" '/.svn/entries' 'dir|svn' HIGH 'Subversion metadata'
-    _dsu_probe_path "$base" '/debug/vars' '"cmdline"|"memstats"|"goroutines"' MEDIUM 'Go expvar debug data'
-    _dsu_probe_path "$base" '/dump.sql' 'CREATE TABLE|INSERT INTO|-- MySQL dump|PostgreSQL database dump' CRITICAL 'Database dump'
-    _dsu_probe_path "$base" '/backup.zip' '' HIGH 'Backup archive'
-    _dsu_probe_path "$base" '/config.php.bak' '(password|passwd|DB_PASSWORD|database)' HIGH 'Configuration backup'
-    _dsu_probe_path "$base" '/.DS_Store' 'Bud1|DSDB' LOW 'Finder metadata'
-    _dsu_probe_path "$base" '/composer.json' '"require"[[:space:]]*:' LOW 'Composer dependency manifest'
-    _dsu_probe_path "$base" '/package.json' '"dependencies"[[:space:]]*:' LOW 'Node package manifest'
-  fi
-  dsu_finding INFO "Exposure probes are signature-checked to reduce soft-404 false positives"
-}
+  tmp=$(dsu_tmpdir) || return 1
+  jobs="${DSU_AUDIT_JOBS:-4}"
+  [[ "$jobs" =~ ^[0-9]+$ && "$jobs" -ge 1 && "$jobs" -le 12 ]] || jobs=4
 
+  local -a paths=(
+    '/.git/HEAD'
+    '/.env'
+    '/server-status'
+    '/phpinfo.php'
+    '/wp-config.php.bak'
+    '/actuator/env'
+  )
+  local -a markers=(
+    '^ref: refs/'
+    '^(APP_KEY|DB_PASSWORD|DATABASE_URL|AWS_SECRET_ACCESS_KEY|SECRET_KEY)='
+    'Apache Server Status|Server Version:'
+    'phpinfo\(\)|PHP Version'
+    'DB_(NAME|USER|PASSWORD)'
+    'propertySources|activeProfiles|systemProperties'
+  )
+  local -a severities=(HIGH CRITICAL MEDIUM HIGH HIGH HIGH)
+  local -a descriptions=(
+    'Git repository metadata'
+    'Environment secrets'
+    'Apache server-status'
+    'phpinfo output'
+    'WordPress configuration backup'
+    'Spring Boot actuator environment'
+  )
+  if (( deep )); then
+    paths+=( '/.svn/entries' '/debug/vars' '/dump.sql' '/backup.zip' '/config.php.bak' '/.DS_Store' '/composer.json' '/package.json' )
+    markers+=( 'dir|svn' '"cmdline"|"memstats"|"goroutines"' 'CREATE TABLE|INSERT INTO|-- MySQL dump|PostgreSQL database dump' '' '(password|passwd|DB_PASSWORD|database)' 'Bud1|DSDB' '"require"[[:space:]]*:' '"dependencies"[[:space:]]*:' )
+    severities+=( HIGH MEDIUM CRITICAL HIGH HIGH LOW LOW LOW )
+    descriptions+=( 'Subversion metadata' 'Go expvar debug data' 'Database dump' 'Backup archive' 'Configuration backup' 'Finder metadata' 'Composer dependency manifest' 'Node package manifest' )
+  fi
+
+  local -a batch=()
+  for ((idx=0; idx<${#paths[@]}; idx++)); do
+    (_dsu_probe_path_result "$base" "${paths[$idx]}" "${markers[$idx]}" "${severities[$idx]}" "${descriptions[$idx]}" || true) >"$tmp/result.$idx" &
+    batch+=("$!")
+    if (( ${#batch[@]} >= jobs )); then
+      for pid in "${batch[@]}"; do wait "$pid" 2>/dev/null || true; done
+      batch=()
+    fi
+  done
+  for pid in "${batch[@]}"; do wait "$pid" 2>/dev/null || true; done
+
+  for ((idx=0; idx<${#paths[@]}; idx++)); do
+    while IFS=$'\t' read -r sev msg; do
+      [[ -n "$sev$msg" ]] || continue
+      dsu_finding "$sev" "$msg"
+    done <"$tmp/result.$idx"
+  done
+  dsu_finding INFO "Exposure probes are signature-checked to reduce soft-404 false positives"
+  dsu_cleanup_dir "$tmp"
+}
 _dsu_audit_deep_dns() {
   local host="$1" ns output recursion
   dsu_section "Deep DNS exposure checks"

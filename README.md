@@ -58,6 +58,37 @@ exec bash
 
 ---
 
+# ⚡ Performance
+
+The suite is designed to keep interactive diagnostics snappy even when individual network operations are slow. Independent DNS, HTTP, TLS, PTR, and WHOIS work is executed concurrently where it is safe to do so, while output remains ordered and readable.
+
+Default timeout tuning:
+
+```text
+DSU_DNS_TIMEOUT=2
+DSU_DNS_TRIES=1
+DSU_CONNECT_TIMEOUT=4
+DSU_MAX_TIME=8
+DSU_WHOIS_TIMEOUT=7
+DSU_AUDIT_JOBS=4
+```
+
+You can override these per command when working across unusually slow links:
+
+```bash
+DSU_CONNECT_TIMEOUT=7 DSU_MAX_TIME=15 dsu check example.com
+```
+
+Or tighten them for fast internal support workflows:
+
+```bash
+DSU_CONNECT_TIMEOUT=2 DSU_MAX_TIME=5 DSU_WHOIS_TIMEOUT=4 dsu check example.com
+```
+
+`DSU_AUDIT_JOBS` controls the bounded concurrency used for accidental-exposure probes. The default of `4` is intentionally conservative.
+
+---
+
 # 🧰 Main Commands
 
 The canonical entry point is:
@@ -173,6 +204,14 @@ IPv6 is supported as well:
 dnsutil reverse 2001:db8::10
 ```
 
+PTR results are classified explicitly:
+
+- ✅ a real PTR answer is shown as successful
+- ℹ️ a successful DNS response with no PTR is shown as `no PTR`
+- ❌ resolver timeouts, `SERVFAIL`, unreachable DNS servers, and transport errors are shown as lookup failures
+
+Resolver diagnostics are never presented as PTR hostnames.
+
 ---
 
 ## 📬 Mail Security
@@ -229,6 +268,8 @@ Helps diagnose:
 dnsutil whois example.com
 dnsutil w example.com
 ```
+
+The registrar parser understands common WHOIS layouts, including padded fields such as `Registrar Name........:`, multi-line registrar fields, and registries that expose a registrar handle which must be resolved to the registrar name. The compact site overview places the registrar near the top of the report. 🧭
 
 ---
 
@@ -925,7 +966,13 @@ Run the included smoke suite with:
 ./tests/smoke.sh
 ```
 
-The tests cover key CLI behavior, syntax, help routing, certificate workflows, DNS parsing, audit authorization controls, and installation behavior.
+Run the performance regression checks with:
+
+```bash
+./tests/performance.sh
+```
+
+The tests cover key CLI behavior, syntax, help routing, certificate workflows, DNS parsing, audit authorization controls, installation behavior, and protection against accidentally re-serializing latency-sensitive network checks.
 
 ---
 

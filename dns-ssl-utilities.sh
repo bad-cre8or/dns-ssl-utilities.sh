@@ -84,6 +84,14 @@ ${DSU_BOLD}Global options${DSU_RESET}
   ${DSU_GREEN}--ascii${DSU_RESET}           Use ASCII status markers instead of Unicode
   ${DSU_GREEN}doctor${DSU_RESET}            Check required and optional dependencies
 
+${DSU_BOLD}Performance tuning${DSU_RESET}
+  ${DSU_GREEN}DSU_DNS_TIMEOUT${DSU_RESET}      DNS retry timeout in seconds ${DSU_GRAY}(default: $DSU_DNS_TIMEOUT)${DSU_RESET}
+  ${DSU_GREEN}DSU_DNS_TRIES${DSU_RESET}        DNS attempts per query ${DSU_GRAY}(default: $DSU_DNS_TRIES)${DSU_RESET}
+  ${DSU_GREEN}DSU_CONNECT_TIMEOUT${DSU_RESET}  HTTP connect timeout ${DSU_GRAY}(default: $DSU_CONNECT_TIMEOUT)${DSU_RESET}
+  ${DSU_GREEN}DSU_MAX_TIME${DSU_RESET}         General HTTP/TLS timeout ${DSU_GRAY}(default: $DSU_MAX_TIME)${DSU_RESET}
+  ${DSU_GREEN}DSU_WHOIS_TIMEOUT${DSU_RESET}    WHOIS timeout ${DSU_GRAY}(default: $DSU_WHOIS_TIMEOUT)${DSU_RESET}
+  ${DSU_GREEN}DSU_AUDIT_JOBS${DSU_RESET}       Exposure-audit concurrency ${DSU_GRAY}(default: ${DSU_AUDIT_JOBS:-4})${DSU_RESET}
+
 ${DSU_BOLD}Command help${DSU_RESET}
   ${DSU_CYAN}dns --help${DSU_RESET}          DNS command reference
   ${DSU_CYAN}ssl --help${DSU_RESET}          SSL/TLS + certificate-file reference
@@ -122,6 +130,12 @@ dsu_doctor() {
   dsu_keyval "Version" "$DSU_VERSION"
   dsu_keyval "Bash" "$BASH_VERSION"
   dsu_keyval "Home" "$DSU_HOME"
+  dsu_section "Network tuning"
+  dsu_keyval "DNS timeout" "${DSU_DNS_TIMEOUT}s × ${DSU_DNS_TRIES} try/tries"
+  dsu_keyval "Connect timeout" "${DSU_CONNECT_TIMEOUT}s"
+  dsu_keyval "General max time" "${DSU_MAX_TIME}s"
+  dsu_keyval "WHOIS timeout" "${DSU_WHOIS_TIMEOUT}s"
+  dsu_keyval "Audit jobs" "${DSU_AUDIT_JOBS:-4}"
   dsu_section "Dependencies"
   local cmd package class
   while IFS=$'\t' read -r cmd package class; do

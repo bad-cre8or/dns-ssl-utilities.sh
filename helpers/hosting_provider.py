@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -17,7 +19,10 @@ class Signal:
     confidence: str
 
 
-def run(argv: list[str], timeout: int = 10) -> str:
+COMMAND_TIMEOUT = max(1, int(os.environ.get("DSU_HELPER_TIMEOUT", "5")))
+
+
+def run(argv: list[str], timeout: int = COMMAND_TIMEOUT) -> str:
     try:
         p = subprocess.run(argv, text=True, capture_output=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired):
@@ -34,11 +39,23 @@ def host(value: str) -> str:
 
 
 def dig(name: str, rrtype: str) -> list[str]:
-    return [x.rstrip(".") for x in run(["dig", "+short", rrtype, name]).splitlines() if x.strip()]
+    dns_timeout = os.environ.get("DSU_DNS_TIMEOUT", "2")
+    dns_tries = os.environ.get("DSU_DNS_TRIES", "1")
+    return [
+        x.rstrip(".")
+        for x in run(["dig", f"+time={dns_timeout}", f"+tries={dns_tries}", "+short", rrtype, name]).splitlines()
+        if x.strip()
+    ]
 
 
 def ptr(ip: str) -> list[str]:
-    return [x.rstrip(".") for x in run(["dig", "+short", "-x", ip]).splitlines() if x.strip()]
+    dns_timeout = os.environ.get("DSU_DNS_TIMEOUT", "2")
+    dns_tries = os.environ.get("DSU_DNS_TRIES", "1")
+    return [
+        x.rstrip(".")
+        for x in run(["dig", f"+time={dns_timeout}", f"+tries={dns_tries}", "+short", "-x", ip]).splitlines()
+        if x.strip()
+    ]
 
 
 def first_ip(values: list[str]) -> str | None:
@@ -76,10 +93,18 @@ def whois_org(ip: str | None) -> str | None:
     return None
 
 
-def guess(domain: str) -> Signal | None:
-    cnames = dig(domain, "CNAME") + dig(f"www.{domain}", "CNAME")
-    a = first_ip(dig(domain, "A"))
-    aaaa = first_ip(dig(domain, "AAAA"))
+def guess(domain: str, *, use_whois: bool = True) -> Signal | None:
+    # DNS lookups are independent, so perform them together. This matters noticeably
+    # on WSL/VPN/resolvers with even modest per-query latency.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        future_cname = pool.submit(dig, domain, "CNAME")
+        future_www_cname = pool.submit(dig, f"www.{domain}", "CNAME")
+        future_a = pool.submit(dig, domain, "A")
+        future_aaaa = pool.submit(dig, domain, "AAAA")
+        cnames = future_cname.result() + future_www_cname.result()
+        a = first_ip(future_a.result())
+        aaaa = first_ip(future_aaaa.result())
+
     chosen_ip = a or aaaa
     ptrs = ptr(chosen_ip) if chosen_ip else []
     cname_blob = " ".join(cnames).lower()
@@ -114,9 +139,10 @@ def guess(domain: str) -> Signal | None:
         if needle in ptr_blob:
             return Signal(provider, f"PTR: {', '.join(ptrs)}", "medium")
 
-    org = whois_org(chosen_ip)
-    if org:
-        return Signal(org, f"WHOIS organisation for {chosen_ip}", "low")
+    if use_whois:
+        org = whois_org(chosen_ip)
+        if org:
+            return Signal(org, f"WHOIS organisation for {chosen_ip}", "low")
     return None
 
 
@@ -124,13 +150,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("target")
     ap.add_argument("--plain", action="store_true", help="Only print the provider name")
+    ap.add_argument("--fast", action="store_true", help="Skip slow IP-WHOIS fallback")
     ns = ap.parse_args()
     try:
         domain = host(ns.target)
     except (ValueError, UnicodeError) as exc:
         print(f"error: {exc}")
         return 2
-    signal = guess(domain)
+    signal = guess(domain, use_whois=not ns.fast)
     if not signal:
         print("Unknown" if ns.plain else "Provider: Unknown")
         return 1

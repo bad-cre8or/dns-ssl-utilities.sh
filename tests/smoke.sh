@@ -71,6 +71,61 @@ dns_out=$(PATH="$TMP/mockbin:$PATH" $SUITE --no-color --ascii dns lookup example
 mail_out=$(PATH="$TMP/mockbin:$PATH" $SUITE --no-color --ascii dns mail example.test); grep -q 'DMARC policy: reject' <<<"$mail_out" || fail 'mail DNS mock'
 pass 'DNS routing/parsing'
 
+# Registrar regression: handle-based WHOIS must resolve to the human registrar
+# name, and dotted WHOIS field padding must parse correctly.
+mkdir -p "$TMP/regbin"
+cat >"$TMP/regbin/dig" <<'MOCK'
+#!/usr/bin/env bash
+if [[ " $* " == *" SOA "* && " $* " == *" +noall "* ]]; then
+  echo 'example.no. 60 IN SOA ns1.example.no. hostmaster.example.no. 1 2 3 4 5'
+fi
+MOCK
+cat >"$TMP/regbin/whois" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+  example.no)
+    cat <<'OUT'
+Domain Name................: example.no
+Registrar Handle...........: REG42-NORID
+OUT
+    ;;
+  REG42-NORID)
+    echo 'Registrar Name.............: Domeneshop AS'
+    ;;
+esac
+MOCK
+chmod +x "$TMP/regbin/"*
+registrar_out=$(PATH="$TMP/regbin:$PATH" $SUITE --no-color --ascii dns whois example.no)
+grep -q 'Registrar.*Domeneshop' <<<"$registrar_out" || fail 'registrar handle/name WHOIS fallback'
+pass 'registrar WHOIS extraction'
+
+# PTR regression: resolver transport failures are errors, never successful PTRs.
+mkdir -p "$TMP/ptrbin"
+cat >"$TMP/ptrbin/dig" <<'MOCK'
+#!/usr/bin/env bash
+if [[ " $* " == *" +comments "* && " $* " == *" -x "* ]]; then
+  if [[ "${PTR_MODE:-timeout}" == ok ]]; then
+    cat <<'OUT'
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
+10.2.0.192.in-addr.arpa. 60 IN PTR ptr.example.test.
+OUT
+    exit 0
+  fi
+  echo ';; communications error to 10.255.255.254#53: timed out'
+  echo ';; communications error to 10.255.255.254#53: timed out'
+  exit 9
+fi
+# Authority lookup used only for the genuine no-PTR path.
+exit 0
+MOCK
+chmod +x "$TMP/ptrbin/dig"
+ptr_fail_out=$(PATH="$TMP/ptrbin:$PATH" $SUITE --no-color --ascii dns reverse 192.0.2.10)
+grep -q '\[X\].*PTR lookup failed (resolver timed out)' <<<"$ptr_fail_out" || fail 'PTR resolver failure classification'
+! grep -q '\[OK\].*communications error' <<<"$ptr_fail_out" || fail 'PTR transport error marked successful'
+ptr_ok_out=$(PTR_MODE=ok PATH="$TMP/ptrbin:$PATH" $SUITE --no-color --ascii dns reverse 192.0.2.10)
+grep -q '\[OK\].*192.0.2.10.*ptr.example.test' <<<"$ptr_ok_out" || fail 'valid PTR classification'
+pass 'PTR success/error classification'
+
 set +e
 $SUITE --no-color --ascii audit example.test --deep >"$TMP/auth.out" 2>&1
 rc=$?
@@ -86,5 +141,16 @@ HOME="$TEST_HOME" DSU_INSTALL_DIR="$TEST_HOME/share/dsu" DSU_BIN_DIR="$TEST_HOME
 [[ -L "$TEST_HOME/bin/ssl" && -L "$TEST_HOME/bin/dsu" ]] || fail 'installer aliases'
 alias_out=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" ssl --no-color cert --help); grep -q 'Usage: ssl cert' <<<"$alias_out" || fail 'installed ssl alias'
 pass 'installer and convenience entry points'
+
+# Regression: documentation files are optional and must never block install.
+MIN_SRC="$TMP/minimal-source"
+cp -a "$ROOT" "$MIN_SRC"
+rm -f "$MIN_SRC/.README"
+MIN_HOME="$TMP/minimal-home"
+mkdir -p "$MIN_HOME"
+HOME="$MIN_HOME" DSU_INSTALL_DIR="$MIN_HOME/share/dsu" DSU_BIN_DIR="$MIN_HOME/bin" "$MIN_SRC/setup.sh" >/dev/null
+[[ -x "$MIN_HOME/share/dsu/dns-ssl-utilities.sh" ]] || fail 'installer without .README'
+[[ -L "$MIN_HOME/bin/dsu" ]] || fail 'installer aliases without .README'
+pass 'installer tolerates optional docs missing'
 
 printf '\nAll smoke tests passed.\n'

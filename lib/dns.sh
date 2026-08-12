@@ -68,7 +68,127 @@ EOF_HELP
 
 _dsu_dig_lines() {
   local type="$1" name="$2"
-  dig +short "$type" "$name" 2>/dev/null | sed 's/\.$//'
+  case "${type^^}" in
+    A)
+      dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" +short A "$name" 2>/dev/null \
+        | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print}'
+      ;;
+    AAAA)
+      dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" +short AAAA "$name" 2>/dev/null \
+        | awk 'index($0, ":") {print}'
+      ;;
+    *)
+      dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" +short "$type" "$name" 2>/dev/null | sed 's/\.$//'
+      ;;
+  esac
+}
+
+_dsu_zone_apex_guess() {
+  local host="$1" zone
+  zone=$(dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" "$host" SOA +noall +answer +authority 2>/dev/null \
+    | awk '$4=="SOA" {print $1; exit}' | sed 's/\.$//')
+  printf '%s' "${zone:-$host}"
+}
+
+_dsu_whois_first_value() {
+  local keys="$1"
+  awk -v keys="$keys" '
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    function norm(s) {
+      s=tolower(s)
+      gsub(/[._-]+/, " ", s)
+      gsub(/[[:space:]]+/, " ", s)
+      return trim(s)
+    }
+    BEGIN {
+      count=split(keys, wanted, "|")
+      for (i=1; i<=count; i++) wanted_map[norm(wanted[i])]=1
+    }
+    {
+      line=$0
+      sub(/\r$/, "", line)
+      if (waiting) {
+        candidate=trim(line)
+        if (candidate != "") { print candidate; exit }
+      }
+      colon=index(line, ":")
+      if (!colon) next
+      key=norm(substr(line, 1, colon-1))
+      if (!(key in wanted_map)) next
+      value=trim(substr(line, colon+1))
+      if (value != "") { print value; exit }
+      waiting=1
+    }
+  '
+}
+
+_dsu_registrar_pretty() {
+  local value
+  value=$(dsu_trim "$*")
+  # Present the recognizable registrar brand while keeping WHOIS as the source.
+  # This strips only common terminal legal-entity suffixes.
+  value=$(printf '%s\n' "$value" | sed -E '
+    s/[[:space:]]*,?[[:space:]]+(L\.?L\.?C\.?|INC\.?|INCORPORATED|LTD\.?|LIMITED|GMBH|AG|AS|ASA|S\.?A\.?|B\.?V\.?)[[:space:]]*$//I
+  ')
+  printf '%s' "$value"
+}
+
+_dsu_whois_registrar() {
+  local data="$1" value handle details
+  value=$(printf '%s\n' "$data" | _dsu_whois_first_value 'registrar|registrar name|sponsoring registrar|registrar organization|registrar organisation')
+  if [[ -n "$value" ]]; then
+    _dsu_registrar_pretty "$value"
+    return 0
+  fi
+
+  # Handle-based registries (notably NORID-style WHOIS) may return only a
+  # registrar object handle in the domain record. Resolve that object lazily,
+  # only when the direct registrar name was absent, so common lookups stay fast.
+  handle=$(printf '%s\n' "$data" | _dsu_whois_first_value 'registrar handle' || true)
+  [[ -n "$handle" ]] || return 1
+  if dsu_has whois; then
+    details=$(timeout "$DSU_WHOIS_TIMEOUT" whois "$handle" 2>/dev/null || true)
+    value=$(printf '%s\n' "$details" | _dsu_whois_first_value 'registrar name|name|organization|organisation' || true)
+    if [[ -n "$value" ]]; then
+      _dsu_registrar_pretty "$value"
+      return 0
+    fi
+  fi
+  printf '%s' "$handle"
+}
+
+_dsu_ptr_probe() {
+  local ip="$1" output rc status ptr message
+  output=$(dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" -x "$ip" +noall +comments +answer 2>&1)
+  rc=$?
+
+  # A valid answer wins even if dig logged a transient resolver warning first.
+  ptr=$(printf '%s\n' "$output" | awk 'toupper($4)=="PTR" {gsub(/\.$/, "", $5); print $5}' | awk 'NF && !seen[$0]++' | paste -sd ',' -)
+  if [[ -n "$ptr" ]]; then
+    printf 'OK\t%s\n' "$ptr"
+    return 0
+  fi
+
+  status=$(printf '%s\n' "$output" | sed -nE 's/.*status:[[:space:]]*([A-Z]+),.*/\1/p' | head -1)
+  case "$output" in
+    *'communications error'*'timed out'*|*'connection timed out'*) message='resolver timed out' ;;
+    *'no servers could be reached'*) message='no DNS servers reachable' ;;
+    *'connection refused'*) message='resolver connection refused' ;;
+    *'network is unreachable'*|*'Network is unreachable'*) message='network unreachable' ;;
+    *) message='' ;;
+  esac
+
+  if [[ -n "$message" ]]; then
+    printf 'ERROR\t%s\n' "$message"
+  elif (( rc != 0 )); then
+    printf 'ERROR\tdig failed (exit %d)\n' "$rc"
+  elif [[ "$status" == 'NOERROR' || "$status" == 'NXDOMAIN' ]]; then
+    printf 'NONE\tno PTR\n'
+  elif [[ -n "$status" ]]; then
+    printf 'ERROR\tDNS %s\n' "$status"
+  else
+    printf 'ERROR\tresolver returned no usable response\n'
+  fi
 }
 
 _dsu_print_rr() {
@@ -94,43 +214,98 @@ dsu_dns_lookup() {
     case "$type" in A|AAAA|MX|NS|TXT|CAA|SOA|CNAME|SRV|DS|DNSKEY) _dsu_print_rr "$type" "$host" ;; *) dsu_bad "Unsupported record type: $type"; return 2 ;; esac
     return
   fi
-  local rr
-  for rr in A AAAA CNAME MX NS CAA SOA TXT; do _dsu_print_rr "$rr" "$host"; done
+
+  local tmp rr pid result
+  local -a records=(A AAAA CNAME MX NS CAA SOA TXT) pids=()
+  tmp=$(dsu_tmpdir) || return 1
+  for rr in "${records[@]}"; do
+    (_dsu_dig_lines "$rr" "$host") >"$tmp/$rr" &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  for rr in "${records[@]}"; do
+    result=$(cat "$tmp/$rr" 2>/dev/null || true)
+    if [[ -n "$result" ]]; then
+      while IFS= read -r line; do dsu_keyval "$rr" "$line"; done <<< "$result"
+    else
+      dsu_keyval "$rr" "${DSU_GRAY}—${DSU_RESET}"
+    fi
+  done
+  dsu_cleanup_dir "$tmp"
 }
 
 dsu_dns_reverse() {
-  local input="${1:-}" host addresses line ptr soa
+  local input="${1:-}" host addresses line ptr soa tmp pid
   [[ -n "$input" ]] || { dsu_bad "Usage: dns reverse <domain-or-ip>"; return 2; }
   dsu_need dig dnsutils || return
   host=$(dsu_normalize_host "$input")
   dsu_section "Reverse DNS · $host"
+  tmp=$(dsu_tmpdir) || return 1
+
   if dsu_is_ip "$host"; then
     addresses="$host"
   else
-    dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; return 2; }
-    addresses="$( { _dsu_dig_lines A "$host"; _dsu_dig_lines AAAA "$host"; } | awk 'NF' | sort -u )"
+    dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; dsu_cleanup_dir "$tmp"; return 2; }
+    local p1 p2
+    (_dsu_dig_lines A "$host") >"$tmp/A" & p1=$!
+    (_dsu_dig_lines AAAA "$host") >"$tmp/AAAA" & p2=$!
+    wait "$p1" 2>/dev/null || true; wait "$p2" 2>/dev/null || true
+    addresses="$(cat "$tmp/A" "$tmp/AAAA" 2>/dev/null | awk 'NF' | sort -u)"
   fi
-  [[ -n "$addresses" ]] || { dsu_warn "No A/AAAA addresses found"; return 1; }
+  [[ -n "$addresses" ]] || { dsu_warn "No A/AAAA addresses found"; dsu_cleanup_dir "$tmp"; return 1; }
+
+  local -a ips=() pids=()
   while IFS= read -r line; do
-    ptr=$(dig +short -x "$line" 2>/dev/null | sed 's/\.$//' | paste -sd ', ' -)
-    if [[ -n "$ptr" ]]; then
-      dsu_ok "${DSU_CYAN}$line${DSU_RESET} → $ptr"
-    else
-      soa=$(dig -x "$line" +noall +authority 2>/dev/null | awk '$4=="SOA" {print $5; exit}' | sed 's/\.$//')
-      if [[ -n "$soa" ]]; then dsu_warn "$line → no PTR (authority: $soa)"; else dsu_warn "$line → no PTR"; fi
-    fi
+    [[ -n "$line" ]] || continue
+    ips+=("$line")
+    (_dsu_ptr_probe "$line") >"$tmp/ptr.${#ips[@]}" &
+    pids+=("$!")
+    (
+      dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" -x "$line" +noall +authority 2>/dev/null \
+        | awk '$4=="SOA" {print $5; exit}' | sed 's/\.$//'
+    ) >"$tmp/soa.${#ips[@]}" &
+    pids+=("$!")
   done <<< "$addresses"
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+
+  local i=0
+  for line in "${ips[@]}"; do
+    ((i+=1))
+    ptr=$(cat "$tmp/ptr.$i" 2>/dev/null || true)
+    local ptr_state ptr_value
+    ptr_state=${ptr%%$'\t'*}
+    ptr_value=${ptr#*$'\t'}
+    case "$ptr_state" in
+      OK) dsu_ok "${DSU_CYAN}$line${DSU_RESET} → $ptr_value" ;;
+      NONE)
+        soa=$(cat "$tmp/soa.$i" 2>/dev/null || true)
+        if [[ -n "$soa" ]]; then dsu_info "$line → no PTR (authority: $soa)"; else dsu_info "$line → no PTR"; fi
+        ;;
+      ERROR) dsu_bad "$line → PTR lookup failed ($ptr_value)" ;;
+      *) dsu_bad "$line → PTR lookup failed (unrecognized resolver response)" ;;
+    esac
+  done
+  dsu_cleanup_dir "$tmp"
 }
 
 dsu_dns_mail() {
-  local input="${1:-}" selector="${2:-}" host spf dmarc caa mta tlsrpt dkim found=0
+  local input="${1:-}" selector="${2:-}" host spf dmarc caa mta tlsrpt dkim found=0 tmp pid
   [[ -n "$input" ]] || { dsu_bad "Usage: dns mail <domain> [dkim-selector]"; return 2; }
   dsu_need dig dnsutils || return
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid domain: $input"; return 2; }
   dsu_section "Mail DNS posture · $host"
 
-  spf=$(_dsu_dig_lines TXT "$host" | tr -d '"' | grep -i '^v=spf1' | head -1)
+  tmp=$(dsu_tmpdir) || return 1
+  local -a base_pids=()
+  (_dsu_dig_lines TXT "$host") >"$tmp/txt" & base_pids+=("$!")
+  (_dsu_dig_lines TXT "_dmarc.$host") >"$tmp/dmarc" & base_pids+=("$!")
+  (_dsu_dig_lines CAA "$host") >"$tmp/caa" & base_pids+=("$!")
+  (_dsu_dig_lines TXT "_mta-sts.$host") >"$tmp/mta" & base_pids+=("$!")
+  (_dsu_dig_lines TXT "_smtp._tls.$host") >"$tmp/tlsrpt" & base_pids+=("$!")
+  for pid in "${base_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+
+  spf=$(tr -d '"' <"$tmp/txt" | grep -i '^v=spf1' | head -1)
   if [[ -z "$spf" ]]; then
     dsu_warn "SPF: missing"
   else
@@ -138,7 +313,7 @@ dsu_dns_mail() {
     case "$spf" in *'+all'*) dsu_bad "SPF ends in +all or permits all senders" ;; *'-all'*) dsu_ok "SPF enforcement: hard fail (-all)" ;; *'~all'*) dsu_warn "SPF enforcement: soft fail (~all)" ;; *'?all'*) dsu_warn "SPF enforcement: neutral (?all)" ;; esac
   fi
 
-  dmarc=$(_dsu_dig_lines TXT "_dmarc.$host" | tr -d '"' | grep -i '^v=DMARC1' | head -1)
+  dmarc=$(tr -d '"' <"$tmp/dmarc" | grep -i '^v=DMARC1' | head -1)
   if [[ -z "$dmarc" ]]; then
     dsu_warn "DMARC: missing"
   else
@@ -148,13 +323,13 @@ dsu_dns_mail() {
     case "$dmarc_policy" in reject) dsu_ok "DMARC policy: reject" ;; quarantine) dsu_warn "DMARC policy: quarantine" ;; none) dsu_warn "DMARC policy: none (monitoring only)" ;; esac
   fi
 
-  caa=$(_dsu_dig_lines CAA "$host")
+  caa=$(cat "$tmp/caa")
   [[ -n "$caa" ]] && dsu_ok "CAA present" || dsu_warn "CAA: missing"
   [[ -n "$caa" ]] && while IFS= read -r line; do dsu_dim "CAA $line"; done <<< "$caa"
 
-  mta=$(_dsu_dig_lines TXT "_mta-sts.$host" | tr -d '"' | grep -i '^v=STSv1' | head -1)
+  mta=$(tr -d '"' <"$tmp/mta" | grep -i '^v=STSv1' | head -1)
   [[ -n "$mta" ]] && dsu_ok "MTA-STS TXT: $mta" || dsu_info "MTA-STS TXT: not found"
-  tlsrpt=$(_dsu_dig_lines TXT "_smtp._tls.$host" | tr -d '"' | grep -i '^v=TLSRPTv1' | head -1)
+  tlsrpt=$(tr -d '"' <"$tmp/tlsrpt" | grep -i '^v=TLSRPTv1' | head -1)
   [[ -n "$tlsrpt" ]] && dsu_ok "SMTP TLS reporting: $tlsrpt" || dsu_info "SMTP TLS reporting: not found"
 
   local selectors=()
@@ -163,12 +338,22 @@ dsu_dns_mail() {
   else
     selectors=(default selector1 selector2 google google2 k1 s1 s2 dkim mail smtp zoho)
   fi
-  local s
+  local s i=0
+  local -a dkim_pids=()
   for s in "${selectors[@]}"; do
-    dkim=$(_dsu_dig_lines TXT "${s}._domainkey.$host" | tr -d '"' | grep -i 'v=DKIM1' | head -1)
+    ((i+=1))
+    (_dsu_dig_lines TXT "${s}._domainkey.$host") >"$tmp/dkim.$i" &
+    dkim_pids+=("$!")
+  done
+  for pid in "${dkim_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  i=0
+  for s in "${selectors[@]}"; do
+    ((i+=1))
+    dkim=$(tr -d '"' <"$tmp/dkim.$i" | grep -i 'v=DKIM1' | head -1)
     if [[ -n "$dkim" ]]; then dsu_ok "DKIM selector ${DSU_BOLD}$s${DSU_RESET}: found"; dsu_dim "$dkim"; found=1; fi
   done
   (( found )) || dsu_info "DKIM: no record found for checked selectors (absence is not definitive)"
+  dsu_cleanup_dir "$tmp"
 }
 
 dsu_dns_dnssec() {
@@ -198,17 +383,9 @@ dsu_dns_trace() {
 
 
 _dsu_whois_best() {
-  local host="$1" candidate="$1" data labels
-  while [[ "$candidate" == *.* ]]; do
-    data=$(timeout 15 whois "$candidate" 2>/dev/null || true)
-    if printf '%s\n' "$data" | grep -qiE '^(Registrar|Registrar Name|Registry Expiry Date|Domain Name|domain:|Domain Status|nserver:|Name Server:)'; then
-      printf '%s' "$data"
-      return 0
-    fi
-    labels="${candidate#*.}"
-    [[ "$labels" != "$candidate" && "$labels" == *.* ]] || break
-    candidate="$labels"
-  done
+  local host="$1" candidate data
+  candidate=$(_dsu_zone_apex_guess "$host")
+  data=$(timeout "$DSU_WHOIS_TIMEOUT" whois "$candidate" 2>/dev/null || true)
   printf '%s' "$data"
 }
 
@@ -221,7 +398,7 @@ dsu_dns_whois() {
   dsu_section "WHOIS · $host"
   data=$(_dsu_whois_best "$host")
   [[ -n "$data" ]] || { dsu_warn "No WHOIS data returned"; return 1; }
-  registrar=$(printf '%s\n' "$data" | grep -iE '^(Registrar|registrar-name|Registrar Name):' | head -1 | sed 's/^[^:]*:[[:space:]]*//')
+  registrar=$(_dsu_whois_registrar "$data" || true)
   expiry=$(printf '%s\n' "$data" | grep -iE '^(Registry Expiry Date|Registrar Registration Expiration Date|Expiry Date|Expiration Date|paid-till):' | head -1 | sed 's/^[^:]*:[[:space:]]*//')
   created=$(printf '%s\n' "$data" | grep -iE '^(Creation Date|Created On|created):' | head -1 | sed 's/^[^:]*:[[:space:]]*//')
   status=$(printf '%s\n' "$data" | grep -iE '^(Domain Status|Status):' | head -6 | sed 's/^[^:]*:[[:space:]]*//' | paste -sd ', ' -)

@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Shared runtime helpers for dns-ssl-utilities.
 
-DSU_VERSION="2.0.0"
+DSU_VERSION="2.1.1"
 DSU_NAME="DNS + SSL Utilities"
 DSU_HOME="${DSU_HOME:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
-DSU_CONNECT_TIMEOUT="${DSU_CONNECT_TIMEOUT:-6}"
-DSU_MAX_TIME="${DSU_MAX_TIME:-12}"
+DSU_CONNECT_TIMEOUT="${DSU_CONNECT_TIMEOUT:-4}"
+DSU_MAX_TIME="${DSU_MAX_TIME:-8}"
+DSU_DNS_TIMEOUT="${DSU_DNS_TIMEOUT:-2}"
+DSU_DNS_TRIES="${DSU_DNS_TRIES:-1}"
+DSU_WHOIS_TIMEOUT="${DSU_WHOIS_TIMEOUT:-7}"
 DSU_USER_AGENT="${DSU_USER_AGENT:-dns-ssl-utilities/${DSU_VERSION}}"
 
 _dsu_color_enabled=1
@@ -127,10 +130,7 @@ PY
   fi
   [[ ${#host} -le 253 && "$host" != *..* ]] || return 1
   if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    python3 - "$host" <<'PY' >/dev/null 2>&1
-import ipaddress, sys
-ipaddress.ip_address(sys.argv[1])
-PY
+    dsu_is_ip "$host"
     return $?
   fi
   [[ "$host" == *.* ]] || return 1
@@ -142,12 +142,28 @@ PY
 }
 
 dsu_is_ip() {
-  python3 - "$1" <<'PY' >/dev/null 2>&1
+  local value="${1:-}" octet
+  if [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    local IFS='.'
+    local -a _dsu_octets=()
+    read -ra _dsu_octets <<< "$value"
+    for octet in "${_dsu_octets[@]}"; do
+      [[ "$octet" =~ ^[0-9]+$ ]] || return 1
+      (( 10#$octet <= 255 )) || return 1
+    done
+    return 0
+  fi
+  [[ "$value" == *:* ]] || return 1
+  # IPv6 syntax has enough edge cases that the standard library remains the
+  # safest validator, but only invoke Python when the input actually looks IPv6.
+  python3 - "$value" <<'PYIP' >/dev/null 2>&1
 import ipaddress, sys
-ipaddress.ip_address(sys.argv[1])
-PY
+try:
+    ipaddress.IPv6Address(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+PYIP
 }
-
 dsu_extract_port() {
   local input="$1" default="${2:-443}"
   input="${input#http://}"; input="${input#https://}"; input="${input%%/*}"
@@ -205,6 +221,12 @@ dsu_header_values() {
     BEGIN { FS=":" }
     tolower($1)==tolower(key) { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print }
   '
+}
+
+dsu_http_code_from_headers() {
+  local headers="$1" code
+  code=$(printf '%s\n' "$headers" | awk '/^HTTP\// {gsub(/\r/, "", $2); code=$2} END {if (code ~ /^[0-9][0-9][0-9]$/) print code}')
+  printf '%s' "${code:-000}"
 }
 
 dsu_fetch_leaf_cert() {
