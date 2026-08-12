@@ -60,32 +60,39 @@ exec bash
 
 # ⚡ Performance
 
-The suite is designed to keep interactive diagnostics snappy even when individual network operations are slow. Independent DNS, HTTP, TLS, PTR, and WHOIS work is executed concurrently where it is safe to do so, while output remains ordered and readable.
+`dsu check` is deliberately a **hot path**. It does not run the vulnerability audit, cipher enumeration, redirect crawling, CT queries, DKIM selector sweeps, or other heavyweight checks. Independent DNS, WHOIS, HTTP, HTTPS and PTR work is launched concurrently, and the HTTPS transfer is reused for leaf-certificate data so a normal check does not need a second TLS handshake.
 
-Default timeout tuning:
+The fast overview uses tighter deadlines than the deeper subcommands:
 
 ```text
-DSU_DNS_TIMEOUT=2
-DSU_DNS_TRIES=1
-DSU_CONNECT_TIMEOUT=4
-DSU_MAX_TIME=8
-DSU_WHOIS_TIMEOUT=7
-DSU_AUDIT_JOBS=4
+DSU_CHECK_DNS_TIMEOUT=1
+DSU_CHECK_CONNECT_TIMEOUT=2
+DSU_CHECK_MAX_TIME=4
+DSU_CHECK_WHOIS_TIMEOUT=2
+DSU_CHECK_WHOIS_HANDLE_TIMEOUT=1
+DSU_CHECK_PTR_TIMEOUT=1
+DSU_REGISTRAR_CACHE_TTL=21600   # 6 hours
 ```
 
-You can override these per command when working across unusually slow links:
+The normal DNS/HTTP/TLS subcommands retain more forgiving defaults. You can tune only the overview without changing the deeper tools:
 
 ```bash
-DSU_CONNECT_TIMEOUT=7 DSU_MAX_TIME=15 dsu check example.com
+DSU_CHECK_MAX_TIME=6 DSU_CHECK_WHOIS_TIMEOUT=3 dsu check example.com
 ```
 
-Or tighten them for fast internal support workflows:
+For the lowest possible latency, skip reverse DNS for that invocation:
 
 ```bash
-DSU_CONNECT_TIMEOUT=2 DSU_MAX_TIME=5 DSU_WHOIS_TIMEOUT=4 dsu check example.com
+dsu check example.com --no-rdns
 ```
 
-`DSU_AUDIT_JOBS` controls the bounded concurrency used for accidental-exposure probes. The default of `4` is intentionally conservative.
+Registrar names are cached briefly because registrars change far less often than DNS or HTTP state. Force a live WHOIS lookup with:
+
+```bash
+dsu check example.com --fresh
+```
+
+`DSU_AUDIT_JOBS` separately controls bounded concurrency for the defensive exposure audit. The default of `4` is intentionally conservative.
 
 ---
 
@@ -111,7 +118,7 @@ For the most useful domain information in one report:
 dsu check example.com
 ```
 
-This combines high-value DNS, registrar, mail, TLS, HTTP, hosting, and network information into a single readable output.
+This combines high-value DNS, registrar, mail, TLS, HTTP, hosting, and network information into a single readable output. It starts directly with the diagnostic sections: no product banner, tagline, target echo, spinner, or closing tip.
 
 Perfect for:
 

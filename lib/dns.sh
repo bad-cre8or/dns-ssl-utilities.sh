@@ -134,7 +134,7 @@ _dsu_registrar_pretty() {
 }
 
 _dsu_whois_registrar() {
-  local data="$1" value handle details
+  local data="$1" handle_timeout="${2:-$DSU_WHOIS_TIMEOUT}" value handle details
   value=$(printf '%s\n' "$data" | _dsu_whois_first_value 'registrar|registrar name|sponsoring registrar|registrar organization|registrar organisation')
   if [[ -n "$value" ]]; then
     _dsu_registrar_pretty "$value"
@@ -147,7 +147,7 @@ _dsu_whois_registrar() {
   handle=$(printf '%s\n' "$data" | _dsu_whois_first_value 'registrar handle' || true)
   [[ -n "$handle" ]] || return 1
   if dsu_has whois; then
-    details=$(timeout "$DSU_WHOIS_TIMEOUT" whois "$handle" 2>/dev/null || true)
+    details=$(timeout "$handle_timeout" whois "$handle" 2>/dev/null || true)
     value=$(printf '%s\n' "$details" | _dsu_whois_first_value 'registrar name|name|organization|organisation' || true)
     if [[ -n "$value" ]]; then
       _dsu_registrar_pretty "$value"
@@ -158,8 +158,8 @@ _dsu_whois_registrar() {
 }
 
 _dsu_ptr_probe() {
-  local ip="$1" output rc status ptr message
-  output=$(dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" -x "$ip" +noall +comments +answer 2>&1)
+  local ip="$1" timeout_s="${2:-$DSU_DNS_TIMEOUT}" tries="${3:-$DSU_DNS_TRIES}" output rc status ptr message
+  output=$(dig +time="$timeout_s" +tries="$tries" -x "$ip" +noall +comments +answer 2>&1)
   rc=$?
 
   # A valid answer wins even if dig logged a transient resolver warning first.

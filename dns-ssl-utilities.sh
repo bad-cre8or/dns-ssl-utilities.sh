@@ -23,7 +23,7 @@ ${DSU_BOLD}Usage${DSU_RESET}
   ${DSU_GREEN}dsu${DSU_RESET} <command> [subcommand] [arguments]             ${DSU_GRAY}# after setup.sh${DSU_RESET}
 
 ${DSU_BOLD}Fast paths${DSU_RESET}
-  ${DSU_GREEN}check, c${DSU_RESET} <domain>       Complete domain/site health summary
+  ${DSU_GREEN}check, c${DSU_RESET} <domain>       Fast registrar/DNS/TLS/HTTP/PTR summary
   ${DSU_GREEN}audit, a${DSU_RESET} <target>       Web security exposure + hardening audit
   ${DSU_GREEN}rdns${DSU_RESET} <domain|ip>         Reverse DNS/PTR shortcut
   ${DSU_GREEN}cert${DSU_RESET} <domain>            TLS certificate shortcut
@@ -85,6 +85,8 @@ ${DSU_BOLD}Global options${DSU_RESET}
   ${DSU_GREEN}doctor${DSU_RESET}            Check required and optional dependencies
 
 ${DSU_BOLD}Performance tuning${DSU_RESET}
+  ${DSU_GREEN}DSU_CHECK_DNS_TIMEOUT${DSU_RESET} Fast-check DNS timeout ${DSU_GRAY}(default: $DSU_CHECK_DNS_TIMEOUT)${DSU_RESET}
+  ${DSU_GREEN}DSU_CHECK_MAX_TIME${DSU_RESET}    Fast-check HTTP/TLS ceiling ${DSU_GRAY}(default: ${DSU_CHECK_MAX_TIME}s)${DSU_RESET}
   ${DSU_GREEN}DSU_DNS_TIMEOUT${DSU_RESET}      DNS retry timeout in seconds ${DSU_GRAY}(default: $DSU_DNS_TIMEOUT)${DSU_RESET}
   ${DSU_GREEN}DSU_DNS_TRIES${DSU_RESET}        DNS attempts per query ${DSU_GRAY}(default: $DSU_DNS_TRIES)${DSU_RESET}
   ${DSU_GREEN}DSU_CONNECT_TIMEOUT${DSU_RESET}  HTTP connect timeout ${DSU_GRAY}(default: $DSU_CONNECT_TIMEOUT)${DSU_RESET}
@@ -131,6 +133,9 @@ dsu_doctor() {
   dsu_keyval "Bash" "$BASH_VERSION"
   dsu_keyval "Home" "$DSU_HOME"
   dsu_section "Network tuning"
+  dsu_keyval "Fast check DNS" "${DSU_CHECK_DNS_TIMEOUT}s"
+  dsu_keyval "Fast check HTTP/TLS" "${DSU_CHECK_MAX_TIME}s max"
+  dsu_keyval "Registrar cache" "${DSU_REGISTRAR_CACHE_TTL}s"
   dsu_keyval "DNS timeout" "${DSU_DNS_TIMEOUT}s × ${DSU_DNS_TRIES} try/tries"
   dsu_keyval "Connect timeout" "${DSU_CONNECT_TIMEOUT}s"
   dsu_keyval "General max time" "${DSU_MAX_TIME}s"

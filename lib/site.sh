@@ -8,27 +8,34 @@ ${DSU_BOLD}Usage:${DSU_RESET}
   dns-ssl-utilities.sh site <command> [arguments]
   sitecheck <domain>                          ${DSU_GRAY}# after setup.sh${DSU_RESET}
 
-${DSU_GREEN}check, c${DSU_RESET}        Full domain + hosting + TLS + HTTP health summary
+${DSU_GREEN}check, c${DSU_RESET}        Fast registrar + DNS + mail + hosting + TLS + HTTP + PTR summary
 ${DSU_GREEN}headers, h${DSU_RESET}      HTTP response/security headers
 ${DSU_GREEN}redirects, r${DSU_RESET}    Follow and display HTTP/HTTPS redirect chains
 ${DSU_GREEN}status, s${DSU_RESET}       Compact HTTP + TLS availability status
 
 ${DSU_BLUE}Examples${DSU_RESET}
   sitecheck example.com
-  dns-ssl-utilities.sh site check example.com
+  dsu check example.com
+  dsu check example.com --no-rdns
+  dsu check example.com --fresh
   dns-ssl-utilities.sh site redirects http://example.com
 EOF_HELP
 }
 
-
 _dsu_site_leaf_help() {
   case "${1,,}" in
     check|c|full) cat <<EOF
-${DSU_BOLD}site check${DSU_RESET} — combined domain/site diagnostics
-Usage: site check <domain>
+${DSU_BOLD}site check${DSU_RESET} — fast operational domain summary
+Usage: site check <domain> [--no-rdns] [--fresh]
 Alias: site c
-Includes DNS, DNSSEC, mail policy, hosting/provider, WHOIS, TLS, HTTP headers,
-redirects and IPv4/IPv6 PTR results.
+
+The default path is intentionally lean: registrar, useful DNS records, DNSSEC,
+SPF/DMARC/CAA, hosting guess, TLS certificate expiry, HTTP/HTTPS posture and PTR.
+It does not run the vulnerability audit or heavyweight TLS scans.
+
+Options:
+  --no-rdns  Skip PTR checks for the lowest possible latency
+  --fresh    Ignore the short-lived registrar cache and query WHOIS now
 EOF
       ;;
     headers|header|h) printf '%b\n' "${DSU_BOLD}site headers${DSU_RESET} — Usage: site headers <domain-or-url>  (alias: site h)" ;;
@@ -36,6 +43,10 @@ EOF
     status|s) printf '%b\n' "${DSU_BOLD}site status${DSU_RESET} — Usage: site status <domain>  (alias: site s)" ;;
     *) _dsu_site_usage ;;
   esac
+}
+
+_dsu_site_join_lines() {
+  awk 'NF { if (seen++) printf ", "; printf "%s", $0 } END { if (seen) printf "\n" }'
 }
 
 _dsu_site_provider_guess() {
@@ -53,6 +64,12 @@ _dsu_site_provider_guess() {
     *azurewebsites.net*) printf 'Microsoft Azure App Service'; return ;;
     *cloudfront.net*) printf 'Amazon CloudFront'; return ;;
     *fastly.net*) printf 'Fastly'; return ;;
+    *googlehosted.com*|*appspot.com*|*firebaseapp.com*) printf 'Google Cloud'; return ;;
+    *wpenginepowered.com*) printf 'WP Engine'; return ;;
+    *pantheonsite.io*) printf 'Pantheon'; return ;;
+    *herokudns.com*) printf 'Heroku'; return ;;
+    *render.com*) printf 'Render'; return ;;
+    *fly.dev*) printf 'Fly.io'; return ;;
   esac
   if [[ "$ip" == "104.37.39.71" ]]; then printf 'SSL Redirect Proxy / default A record'; return; fi
   if [[ "$ip" =~ ^104\.(1[6-9]|2[0-3])\. ]]; then printf 'Cloudflare'; return; fi
@@ -60,6 +77,15 @@ _dsu_site_provider_guess() {
   [[ "$ip" == 104.37.39.* ]] && { printf 'Digital Garden'; return; }
   [[ "$ip" == 195.47.247.* ]] && { printf 'One.com'; return; }
   case "$ptrs" in
+    *1e100.net*|*googleusercontent.com*) printf 'Google'; return ;;
+    *amazonaws.com*) printf 'Amazon Web Services'; return ;;
+    *azure.com*|*cloudapp.net*) printf 'Microsoft Azure'; return ;;
+    *akamai*|*edgekey.net*|*edgesuite.net*) printf 'Akamai'; return ;;
+    *digitalocean.com*) printf 'DigitalOcean'; return ;;
+    *your-server.de*|*hetzner*) printf 'Hetzner'; return ;;
+    *ovh.net*) printf 'OVHcloud'; return ;;
+    *vultrusercontent.com*) printf 'Vultr'; return ;;
+    *leaseweb*) printf 'Leaseweb'; return ;;
     *tornado-node.net*|*tornado.no*) printf 'SYSE'; return ;;
     *proisp.no*) printf 'ProISP'; return ;;
     *webpod*) printf 'One.com / ProISP infrastructure'; return ;;
@@ -68,49 +94,179 @@ _dsu_site_provider_guess() {
   printf 'Unknown'
 }
 
+_dsu_site_registrar_cache_path() {
+  local host="$1"
+  printf '%s/dns-ssl-utilities/registrar/%s' "${XDG_CACHE_HOME:-$HOME/.cache}" "$host"
+}
+
+_dsu_site_registrar_cache_get() {
+  local host="$1" path now modified age
+  path=$(_dsu_site_registrar_cache_path "$host")
+  [[ -s "$path" ]] || return 1
+  modified=$(stat -c '%Y' "$path" 2>/dev/null) || return 1
+  now=$(date +%s)
+  age=$(( now - modified ))
+  (( age >= 0 && age <= DSU_REGISTRAR_CACHE_TTL )) || return 1
+  head -1 "$path"
+}
+
+_dsu_site_registrar_cache_put() {
+  local host="$1" registrar="$2" path
+  [[ -n "$registrar" ]] || return 0
+  path=$(_dsu_site_registrar_cache_path "$host")
+  mkdir -p -- "$(dirname -- "$path")" 2>/dev/null || return 0
+  printf '%s\n' "$registrar" >"$path" 2>/dev/null || true
+}
+
+_dsu_site_registrar_probe() {
+  local host="$1" fresh="${2:-0}" cached data registrar rc
+  if (( ! fresh )) && cached=$(_dsu_site_registrar_cache_get "$host" 2>/dev/null); then
+    printf 'OK\t%s\n' "$cached"
+    return 0
+  fi
+  if ! dsu_has whois; then
+    printf 'ERROR\twhois not installed\n'
+    return 0
+  fi
+
+  data=$(timeout "$DSU_CHECK_WHOIS_TIMEOUT" whois "$host" 2>/dev/null)
+  rc=$?
+  registrar=$(_dsu_whois_registrar "$data" "$DSU_CHECK_WHOIS_HANDLE_TIMEOUT" 2>/dev/null || true)
+  if [[ -n "$registrar" ]]; then
+    _dsu_site_registrar_cache_put "$host" "$registrar"
+    printf 'OK\t%s\n' "$registrar"
+  elif (( rc == 124 )); then
+    printf 'ERROR\tWHOIS timed out\n'
+  elif [[ -z "$data" ]]; then
+    printf 'ERROR\tWHOIS returned no data\n'
+  else
+    printf 'NONE\tRegistrar not identified\n'
+  fi
+}
+
+_dsu_site_curl_probe() {
+  local scheme="$1" host="$2" prefix="$3"
+  local writeout=$'code=%{http_code}\nurl=%{url_effective}\n'
+  if [[ "$scheme" == https ]]; then
+    # Reuse the HTTPS transfer for leaf-certificate data. No second TLS handshake
+    # is needed on modern curl builds; older builds fall back to OpenSSL below.
+    writeout+=$'certs_begin\n%{certs}\ncerts_end\n'
+  fi
+  curl -ksS -D "$prefix.headers" -o /dev/null \
+    --connect-timeout "$DSU_CHECK_CONNECT_TIMEOUT" --max-time "$DSU_CHECK_MAX_TIME" \
+    -A "$DSU_USER_AGENT" -w "$writeout" "$scheme://$host/" \
+    >"$prefix.meta" 2>"$prefix.err"
+}
+
+_dsu_site_meta_value() {
+  local file="$1" key="$2"
+  sed -n "s/^${key}=//p" "$file" 2>/dev/null | tail -1
+}
+
+_dsu_site_extract_leaf_cert() {
+  local meta="$1" out="$2"
+  awk '
+    /^-----BEGIN CERTIFICATE-----$/ { capture=1 }
+    capture { print }
+    /^-----END CERTIFICATE-----$/ && capture { exit }
+  ' "$meta" >"$out" 2>/dev/null || true
+  [[ -s "$out" ]]
+}
+
+_dsu_site_fetch_leaf_fallback() {
+  local host="$1" out="$2"
+  timeout "$DSU_CHECK_MAX_TIME" openssl s_client -servername "$host" -connect "$host:443" </dev/null 2>/dev/null \
+    | openssl x509 -outform PEM >"$out" 2>/dev/null
+  [[ -s "$out" ]]
+}
+
+_dsu_site_print_http_code() {
+  local label="$1" code="$2"
+  if [[ -n "$code" && "$code" != 000 ]]; then
+    dsu_keyval "$label" "$code"
+  else
+    dsu_bad "$label unavailable"
+  fi
+}
+
 dsu_site_check() {
-  local input="${1:-}" host tmp
-  [[ -n "$input" ]] || { dsu_bad "Usage: site check <domain>"; return 2; }
+  local input="${1:-}" host tmp no_rdns=0 fresh=0
+  [[ -n "$input" ]] || { dsu_bad "Usage: site check <domain> [--no-rdns] [--fresh]"; return 2; }
+  shift || true
+  while (( $# )); do
+    case "$1" in
+      --no-rdns|--no-ptr) no_rdns=1 ;;
+      --fresh) fresh=1 ;;
+      -h|--help) _dsu_site_leaf_help check; return 0 ;;
+      *) dsu_bad "Unknown check option: $1"; return 2 ;;
+    esac
+    shift
+  done
+
   dsu_need dig dnsutils || return
   dsu_need curl curl || return
   dsu_need openssl openssl || return
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; return 2; }
-
   tmp=$(dsu_tmpdir) || return 1
-  printf '\n%sTarget:%s %s%s%s\n' "$DSU_BOLD" "$DSU_RESET" "$DSU_CYAN" "$host" "$DSU_RESET"
 
-  # Fan out independent network operations immediately. The results are still
-  # printed in a stable human-friendly order, but network latency no longer stacks.
+  # Fast path: the independent network probes all launch together. There is no
+  # banner, target echo, spinner, redirect crawl or audit work in this command.
   local pid_a pid_aaaa pid_cname pid_www_cname pid_ns pid_mx pid_txt pid_dmarc pid_caa pid_dnskey pid_dnssec
-  (_dsu_dig_lines A "$host") >"$tmp/a" & pid_a=$!
-  (_dsu_dig_lines AAAA "$host") >"$tmp/aaaa" & pid_aaaa=$!
-  (_dsu_dig_lines CNAME "$host") >"$tmp/cname" & pid_cname=$!
-  (_dsu_dig_lines CNAME "www.$host") >"$tmp/www_cname" & pid_www_cname=$!
-  (_dsu_dig_lines NS "$host") >"$tmp/ns" & pid_ns=$!
-  (_dsu_dig_lines MX "$host") >"$tmp/mx" & pid_mx=$!
-  (_dsu_dig_lines TXT "$host") >"$tmp/txt" & pid_txt=$!
-  (_dsu_dig_lines TXT "_dmarc.$host") >"$tmp/dmarc" & pid_dmarc=$!
-  (_dsu_dig_lines CAA "$host") >"$tmp/caa" & pid_caa=$!
-  (_dsu_dig_lines DNSKEY "$host") >"$tmp/dnskey" & pid_dnskey=$!
-  (dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" A "$host" +dnssec 2>/dev/null || true) >"$tmp/dnssec" & pid_dnssec=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines A "$host") >"$tmp/a" & pid_a=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines AAAA "$host") >"$tmp/aaaa" & pid_aaaa=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines CNAME "$host") >"$tmp/cname" & pid_cname=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines CNAME "www.$host") >"$tmp/www_cname" & pid_www_cname=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines NS "$host") >"$tmp/ns" & pid_ns=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines MX "$host") >"$tmp/mx" & pid_mx=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines TXT "$host") >"$tmp/txt" & pid_txt=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines TXT "_dmarc.$host") >"$tmp/dmarc" & pid_dmarc=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines CAA "$host") >"$tmp/caa" & pid_caa=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines DNSKEY "$host") >"$tmp/dnskey" & pid_dnskey=$!
+  (dig +time="$DSU_CHECK_DNS_TIMEOUT" +tries=1 A "$host" +dnssec 2>/dev/null || true) >"$tmp/dnssec" & pid_dnssec=$!
 
-  local pid_whois='' pid_tls pid_http pid_https
-  if dsu_has whois; then
-    (_dsu_whois_best "$host" || true) >"$tmp/whois" & pid_whois=$!
+  local pid_whois pid_http pid_https
+  (_dsu_site_registrar_probe "$host" "$fresh") >"$tmp/registrar" & pid_whois=$!
+  (_dsu_site_curl_probe http "$host" "$tmp/http" || true) & pid_http=$!
+  (_dsu_site_curl_probe https "$host" "$tmp/https" || true) & pid_https=$!
+
+  # A/AAAA finish quickly and immediately unlock parallel PTR work.
+  wait "$pid_a" 2>/dev/null || true
+  wait "$pid_aaaa" 2>/dev/null || true
+  local a aaaa addresses ip i=0
+  local -a ptr_ips=() ptr_pids=()
+  a=$(cat "$tmp/a" 2>/dev/null || true)
+  aaaa=$(cat "$tmp/aaaa" 2>/dev/null || true)
+  if (( ! no_rdns )); then
+    addresses="$(printf '%s\n%s\n' "$a" "$aaaa" | awk 'NF' | sort -u)"
+    if [[ -n "$addresses" ]]; then
+      while IFS= read -r ip; do
+        [[ -n "$ip" ]] || continue
+        ptr_ips+=("$ip"); ((i+=1))
+        (_dsu_ptr_probe "$ip" "$DSU_CHECK_PTR_TIMEOUT" 1) >"$tmp/ptr.$i" &
+        ptr_pids+=("$!")
+      done <<< "$addresses"
+    fi
   fi
-  (dsu_fetch_leaf_cert "$host" 443 "$tmp/cert.pem" || true) >/dev/null 2>&1 & pid_tls=$!
-  (dsu_http_headers "http://$host/" || true) >"$tmp/http.headers" & pid_http=$!
-  (dsu_http_final_headers "https://$host/" || true) >"$tmp/https.headers" & pid_https=$!
+
+  dsu_section "REGISTRAR"
+  wait "$pid_whois" 2>/dev/null || true
+  local registrar_result registrar_state registrar_value
+  registrar_result=$(cat "$tmp/registrar" 2>/dev/null || true)
+  registrar_state=${registrar_result%%$'\t'*}
+  registrar_value=${registrar_result#*$'\t'}
+  case "$registrar_state" in
+    OK) printf '  %s%s%s\n' "$DSU_BOLD" "$registrar_value" "$DSU_RESET" ;;
+    NONE|ERROR) dsu_warn "$registrar_value" ;;
+    *) dsu_warn "Registrar unavailable" ;;
+  esac
 
   local pid
-  for pid in "$pid_a" "$pid_aaaa" "$pid_cname" "$pid_www_cname" "$pid_ns" "$pid_mx" "$pid_txt" "$pid_dmarc" "$pid_caa" "$pid_dnskey" "$pid_dnssec"; do
+  for pid in "$pid_cname" "$pid_www_cname" "$pid_ns" "$pid_mx" "$pid_txt" "$pid_dmarc" "$pid_caa" "$pid_dnskey" "$pid_dnssec"; do
     wait "$pid" 2>/dev/null || true
   done
 
-  local a aaaa cname provider_cnames ns mx spf dmarc caa
-  a=$(cat "$tmp/a" 2>/dev/null || true)
-  aaaa=$(cat "$tmp/aaaa" 2>/dev/null || true)
+  local cname provider_cnames ns mx spf dmarc caa
   cname=$(cat "$tmp/cname" 2>/dev/null || true)
   provider_cnames=$(cat "$tmp/cname" "$tmp/www_cname" 2>/dev/null | awk 'NF' | sort -u)
   ns=$(cat "$tmp/ns" 2>/dev/null || true)
@@ -119,47 +275,16 @@ dsu_site_check() {
   dmarc=$(tr -d '"' <"$tmp/dmarc" | grep -i '^v=DMARC1' | head -1)
   caa=$(cat "$tmp/caa" 2>/dev/null || true)
 
-  # Start PTR lookups as soon as address DNS is available; they run while the
-  # human-readable DNS, mail, registration and TLS sections are being rendered.
-  local addresses ip i=0
-  local -a ptr_ips=() ptr_pids=()
-  addresses="$(printf '%s\n%s\n' "$a" "$aaaa" | awk 'NF' | sort -u)"
-  if [[ -n "$addresses" ]]; then
-    while IFS= read -r ip; do
-      [[ -n "$ip" ]] || continue
-      ptr_ips+=("$ip"); ((i+=1))
-      (_dsu_ptr_probe "$ip") >"$tmp/ptr.$i" &
-      ptr_pids+=("$!")
-    done <<< "$addresses"
-  fi
-
-  local registrar whois_data
-  dsu_section "REGISTRAR"
-  if [[ -n "$pid_whois" ]]; then
-    wait "$pid_whois" 2>/dev/null || true
-    whois_data=$(cat "$tmp/whois" 2>/dev/null || true)
-    registrar=$(_dsu_whois_registrar "$whois_data" || true)
-    if [[ -n "$registrar" ]]; then
-      printf '  %s%s%s\n' "$DSU_BOLD" "$registrar" "$DSU_RESET"
-    elif [[ -n "$whois_data" ]]; then
-      dsu_warn "Registrar not identified in WHOIS response"
-    else
-      dsu_warn "WHOIS returned no registration data"
-    fi
-  else
-    dsu_warn "Registrar unavailable (install the 'whois' package)"
-  fi
-
   dsu_section "DNS"
-  [[ -n "$a" ]] && dsu_ok "A: $(printf '%s\n' "$a" | paste -sd ', ' -)" || dsu_warn "No A record"
-  [[ -n "$aaaa" ]] && dsu_ok "AAAA: $(printf '%s\n' "$aaaa" | paste -sd ', ' -)" || dsu_info "No AAAA record"
-  [[ -n "$cname" ]] && dsu_info "CNAME: $(printf '%s\n' "$cname" | paste -sd ', ' -)"
-  [[ -n "$ns" ]] && dsu_ok "NS: $(printf '%s\n' "$ns" | paste -sd ', ' -)" || dsu_bad "No NS records returned"
-  [[ -n "$mx" ]] && dsu_ok "MX: $(printf '%s\n' "$mx" | paste -sd ', ' -)" || dsu_info "No MX records"
+  [[ -n "$a" ]] && dsu_ok "A: $(printf '%s\n' "$a" | _dsu_site_join_lines)" || dsu_warn "No A record"
+  [[ -n "$aaaa" ]] && dsu_ok "AAAA: $(printf '%s\n' "$aaaa" | _dsu_site_join_lines)" || dsu_info "No AAAA record"
+  [[ -n "$cname" ]] && dsu_info "CNAME: $(printf '%s\n' "$cname" | _dsu_site_join_lines)"
+  [[ -n "$ns" ]] && dsu_ok "NS: $(printf '%s\n' "$ns" | _dsu_site_join_lines)" || dsu_bad "No NS records returned"
+  [[ -n "$mx" ]] && dsu_ok "MX: $(printf '%s\n' "$mx" | _dsu_site_join_lines)" || dsu_info "No MX records"
   if grep -q 'flags:.* ad[; ]' "$tmp/dnssec" 2>/dev/null; then
-    dsu_ok "DNSSEC validated by resolver (AD flag)"
+    dsu_ok "DNSSEC validated"
   elif [[ -s "$tmp/dnskey" ]]; then
-    dsu_warn "DNSKEY present, but AD validation not observed"
+    dsu_warn "DNSSEC signed, validation not observed"
   else
     dsu_bad "DNSSEC not detected"
   fi
@@ -167,80 +292,113 @@ dsu_site_check() {
   dsu_section "MAIL & SECURITY POLICY"
   [[ -n "$spf" ]] && dsu_ok "SPF: $spf" || dsu_warn "SPF missing"
   [[ -n "$dmarc" ]] && dsu_ok "DMARC: $dmarc" || dsu_warn "DMARC missing"
-  [[ -n "$caa" ]] && dsu_ok "CAA: $(printf '%s\n' "$caa" | paste -sd ', ' -)" || dsu_warn "CAA missing"
+  [[ -n "$caa" ]] && dsu_ok "CAA: $(printf '%s\n' "$caa" | _dsu_site_join_lines)" || dsu_warn "CAA missing"
 
-  dsu_section "HOSTING"
-  local provider first_ip ptr_blob
-  for pid in "${ptr_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  local provider first_ip ptr_blob=''
   first_ip=$(printf '%s\n%s\n' "$a" "$aaaa" | awk 'NF {print; exit}')
-  ptr_blob=$(cat "$tmp"/ptr.* 2>/dev/null | awk -F '\t' '$1=="OK" {print $2}' | paste -sd ' ' -)
-  provider=$(_dsu_site_provider_guess "$first_ip" "$provider_cnames" "$ptr_blob")
-  if [[ "$provider" == "Unknown" ]]; then
+  # Do not let a slow/broken reverse resolver hold the whole report hostage.
+  # Most CDN/platform guesses resolve from A/CNAME immediately. PTR is consulted
+  # only when those cheap signals were insufficient.
+  provider=$(_dsu_site_provider_guess "$first_ip" "$provider_cnames" '')
+  if [[ "$provider" == Unknown && ${#ptr_pids[@]} -gt 0 ]]; then
+    for pid in "${ptr_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+    ptr_blob=$(cat "$tmp"/ptr.* 2>/dev/null | awk -F '\t' '$1=="OK" {print $2}' | paste -sd ' ' -)
+    provider=$(_dsu_site_provider_guess "$first_ip" "$provider_cnames" "$ptr_blob")
+  fi
+  dsu_section "HOSTING"
+  if [[ "$provider" == Unknown ]]; then
     dsu_warn "Guessing: Unknown"
   else
-    dsu_keyval "Guessing" "$provider"
+    printf '  %sGuessing:%s  %s\n' "$DSU_GRAY" "$DSU_RESET" "$provider"
+  fi
+
+  wait "$pid_https" 2>/dev/null || true
+  local cert_end days
+  _dsu_site_extract_leaf_cert "$tmp/https.meta" "$tmp/cert.pem" || true
+  if [[ ! -s "$tmp/cert.pem" ]]; then
+    _dsu_site_fetch_leaf_fallback "$host" "$tmp/cert.pem" || true
   fi
 
   dsu_section "TLS"
-  wait "$pid_tls" 2>/dev/null || true
-  local cert_end days
   if [[ -s "$tmp/cert.pem" ]]; then
     cert_end=$(openssl x509 -in "$tmp/cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2-)
     days=$(dsu_days_until "$cert_end" 2>/dev/null || printf '?')
-    if openssl x509 -in "$tmp/cert.pem" -noout -checkhost "$host" >/dev/null 2>&1; then dsu_ok "Certificate hostname match"; else dsu_bad "Certificate hostname mismatch"; fi
-    if [[ "$days" =~ ^-?[0-9]+$ ]]; then
-      if (( days < 0 )); then dsu_bad "Certificate expired: $cert_end"; elif (( days < 30 )); then dsu_warn "Certificate expires in $days days: $cert_end"; else dsu_ok "Certificate expires in $days days: $cert_end"; fi
+    if openssl x509 -in "$tmp/cert.pem" -noout -checkhost "$host" >/dev/null 2>&1; then
+      dsu_ok "Certificate hostname match"
     else
+      dsu_bad "Certificate hostname mismatch"
+    fi
+    if [[ "$days" =~ ^-?[0-9]+$ ]]; then
+      if (( days < 0 )); then
+        dsu_bad "Certificate expired: $cert_end"
+      elif (( days < 30 )); then
+        dsu_warn "Certificate expires in $days days: $cert_end"
+      else
+        dsu_ok "Certificate expires in $days days: $cert_end"
+      fi
+    elif [[ -n "$cert_end" ]]; then
       dsu_keyval "Certificate expiry" "$cert_end"
     fi
   else
     dsu_bad "No TLS certificate retrieved on port 443"
   fi
 
-  dsu_section "HTTP / HTTPS"
   wait "$pid_http" 2>/dev/null || true
-  wait "$pid_https" 2>/dev/null || true
-  local http_headers https_headers http_code https_code http_loc server powered hsts csp
+  local http_code https_code http_headers https_headers http_loc https_loc server powered hsts csp
+  http_code=$(_dsu_site_meta_value "$tmp/http.meta" code)
+  https_code=$(_dsu_site_meta_value "$tmp/https.meta" code)
   http_headers=$(cat "$tmp/http.headers" 2>/dev/null || true)
   https_headers=$(cat "$tmp/https.headers" 2>/dev/null || true)
-  http_code=$(dsu_http_code_from_headers "$http_headers")
-  https_code=$(dsu_http_code_from_headers "$https_headers")
-  dsu_keyval "HTTP" "$http_code"
-  dsu_keyval "HTTPS" "$https_code"
+
+  dsu_section "HTTP / HTTPS"
+  _dsu_site_print_http_code "HTTP" "${http_code:-000}"
+  _dsu_site_print_http_code "HTTPS" "${https_code:-000}"
   http_loc=$(dsu_header_value "$http_headers" location)
-  if [[ "$http_loc" == https://* ]]; then dsu_ok "HTTP redirects to HTTPS → $http_loc"; else dsu_warn "HTTP does not clearly redirect to HTTPS${http_loc:+ → $http_loc}"; fi
+  https_loc=$(dsu_header_value "$https_headers" location)
+  if [[ "$http_loc" == https://* ]]; then
+    dsu_ok "HTTP redirects to HTTPS → $http_loc"
+  elif [[ "$http_code" =~ ^30[12378]$ && -n "$http_loc" ]]; then
+    dsu_warn "HTTP redirects, but not clearly to HTTPS → $http_loc"
+  elif [[ "$http_code" != 000 ]]; then
+    dsu_warn "HTTP does not redirect to HTTPS${http_loc:+ → $http_loc}"
+  fi
+  [[ "$https_code" =~ ^30[12378]$ && -n "$https_loc" ]] && dsu_info "HTTPS redirect → $https_loc"
+
   server=$(dsu_header_value "$https_headers" server)
   powered=$(dsu_header_value "$https_headers" x-powered-by)
   hsts=$(dsu_header_value "$https_headers" strict-transport-security)
   csp=$(dsu_header_value "$https_headers" content-security-policy)
   [[ -n "$hsts" ]] && dsu_ok "HSTS: $hsts" || dsu_warn "HSTS missing"
-  [[ -n "$csp" ]] && dsu_ok "CSP present" || dsu_warn "Content-Security-Policy missing"
+  [[ -n "$csp" ]] && dsu_ok "Content-Security-Policy present" || dsu_warn "Content-Security-Policy missing"
   [[ -n "$server" ]] && dsu_warn "Server header exposed: $server" || dsu_ok "Server header not exposed"
   [[ -n "$powered" ]] && dsu_warn "X-Powered-By exposed: $powered" || dsu_ok "X-Powered-By not exposed"
 
-  dsu_section "REVERSE DNS"
-  if (( ${#ptr_ips[@]} )); then
-    i=0
-    for ip in "${ptr_ips[@]}"; do
-      ((i+=1))
-      local ptr ptr_state ptr_value
-      ptr=$(cat "$tmp/ptr.$i" 2>/dev/null || true)
-      ptr_state=${ptr%%$'\t'*}
-      ptr_value=${ptr#*$'\t'}
-      case "$ptr_state" in
-        OK) dsu_ok "$ip → $ptr_value" ;;
-        NONE) dsu_info "$ip → no PTR" ;;
-        ERROR) dsu_bad "$ip → PTR lookup failed ($ptr_value)" ;;
-        *) dsu_bad "$ip → PTR lookup failed (unrecognized resolver response)" ;;
-      esac
-    done
-  else
-    dsu_info "No address records to reverse-resolve"
+  if (( ! no_rdns )); then
+    for pid in "${ptr_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+    dsu_section "REVERSE DNS"
+    if (( ${#ptr_ips[@]} )); then
+      i=0
+      for ip in "${ptr_ips[@]}"; do
+        ((i+=1))
+        local ptr ptr_state ptr_value
+        ptr=$(cat "$tmp/ptr.$i" 2>/dev/null || true)
+        ptr_state=${ptr%%$'\t'*}
+        ptr_value=${ptr#*$'\t'}
+        case "$ptr_state" in
+          OK) dsu_ok "$ip → $ptr_value" ;;
+          NONE) dsu_info "$ip → no PTR" ;;
+          ERROR) dsu_bad "$ip → PTR lookup failed ($ptr_value)" ;;
+          *) dsu_bad "$ip → PTR lookup failed (unrecognized resolver response)" ;;
+        esac
+      done
+    else
+      dsu_info "No address records to reverse-resolve"
+    fi
   fi
 
-  printf '\n%sTip:%s run %s%saudit %s%s for the web-security exposure audit.\n' "$DSU_GRAY" "$DSU_RESET" "$DSU_CYAN" "" "$host" "$DSU_RESET"
   dsu_cleanup_dir "$tmp"
 }
+
 dsu_site_headers() {
   dsu_ssl_headers "$@"
 }
@@ -281,6 +439,7 @@ dsu_site_status() {
   dsu_cleanup_dir "$tmp"
   printf '%s%-35s%s HTTP=%s  HTTPS=%s  TLS=%s\n' "$DSU_CYAN" "$host" "$DSU_RESET" "$http" "$https" "$days"
 }
+
 dsu_site_dispatch() {
   local cmd="${1:-help}"; shift || true
   if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _dsu_site_leaf_help "$cmd"; return 0; fi

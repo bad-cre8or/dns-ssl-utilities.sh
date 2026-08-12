@@ -57,24 +57,40 @@ cat >"$TMP/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 sleep "${DSU_TEST_DELAY:-0.20}"
 url=''
-out=''
-want_code=0
+header_file=''
+writeout=''
 prev=''
 for x in "$@"; do
   [[ "$x" == http://* || "$x" == https://* ]] && url="$x"
-  [[ "$prev" == -o ]] && out="$x"
-  [[ "$prev" == -w && "$x" == *'%{http_code}'* ]] && want_code=1
+  [[ "$prev" == -D ]] && header_file="$x"
+  [[ "$prev" == -w ]] && writeout="$x"
   prev="$x"
 done
-if [[ -n "$out" && "$out" != /dev/null ]]; then : >"$out"; fi
-if (( want_code )); then
-  [[ "$url" == http://* ]] && printf 301 || printf 200
-  exit 0
+
+if [[ -n "$header_file" && "$header_file" != '-' ]]; then
+  if [[ "$url" == http://* ]]; then
+    printf 'HTTP/1.1 301 Moved Permanently\r\nLocation: https://example.test/\r\n\r\n' >"$header_file"
+  else
+    printf 'HTTP/2 200\r\nStrict-Transport-Security: max-age=31536000\r\nContent-Security-Policy: default-src '\''self'\''\r\nServer: mock\r\n\r\n' >"$header_file"
+  fi
 fi
-if [[ "$url" == http://* ]]; then
-  printf 'HTTP/1.1 301 Moved Permanently\r\nLocation: https://example.test/\r\n\r\n'
-else
-  printf 'HTTP/2 200\r\nStrict-Transport-Security: max-age=31536000\r\nContent-Security-Policy: default-src '\''self'\''\r\n\r\n'
+
+if [[ "$writeout" == *'code=%{http_code}'* ]]; then
+  if [[ "$url" == http://* ]]; then
+    printf 'code=301\nurl=http://example.test/\n'
+  else
+    cat <<'OUT'
+code=200
+url=https://example.test/
+certs_begin
+-----BEGIN CERTIFICATE-----
+TEST
+-----END CERTIFICATE-----
+certs_end
+OUT
+  fi
+elif [[ "$writeout" == *'%{http_code}'* ]]; then
+  [[ "$url" == http://* ]] && printf 301 || printf 200
 fi
 MOCK
 
@@ -120,8 +136,9 @@ measure_ms() {
 
 export PATH="$TMP/bin:$PATH"
 export DSU_TEST_DELAY=0.20
+export XDG_CACHE_HOME="$TMP/cache"
 
-check_ms=$(measure_ms "$SUITE" --no-color --ascii check example.test)
+check_ms=$(measure_ms "$SUITE" --no-color --ascii check example.test --fresh)
 lookup_ms=$(measure_ms "$SUITE" --no-color --ascii dns lookup example.test)
 mail_ms=$(measure_ms "$SUITE" --no-color --ascii dns mail example.test)
 reverse_ms=$(measure_ms "$SUITE" --no-color --ascii dns reverse example.test)
@@ -133,9 +150,22 @@ printf 'dns reverse: %d ms\n' "$reverse_ms"
 
 # Thresholds are deliberately loose enough for loaded CI machines while still
 # catching a regression back to fully serial network execution.
-(( check_ms < 4000 )) || { echo 'FAIL: check path appears serialized' >&2; exit 1; }
+(( check_ms < 2600 )) || { echo 'FAIL: fast check exceeded cold-cache latency budget' >&2; exit 1; }
 (( lookup_ms < 1800 )) || { echo 'FAIL: dns lookup path appears serialized' >&2; exit 1; }
 (( mail_ms < 2800 )) || { echo 'FAIL: dns mail path appears serialized' >&2; exit 1; }
 (( reverse_ms < 1800 )) || { echo 'FAIL: dns reverse path appears serialized' >&2; exit 1; }
 
+
+# The everyday check is payload-first: no product banner, no target echo, no tip.
+export DSU_TEST_DELAY=0
+check_out=$("$SUITE" --no-color --ascii check example.test --fresh)
+! grep -q '^DNS + SSL Utilities$' <<<"$check_out" || { echo 'FAIL: check printed suite banner' >&2; exit 1; }
+! grep -q '^Target:' <<<"$check_out" || { echo 'FAIL: check echoed target' >&2; exit 1; }
+! grep -qi '^Tip:' <<<"$check_out" || { echo 'FAIL: check printed promotional tip' >&2; exit 1; }
+first_payload=$(printf '%s\n' "$check_out" | awk 'NF {print; exit}')
+[[ "$first_payload" == *'REGISTRAR'* ]] || { echo 'FAIL: registrar is not the first check section' >&2; exit 1; }
+grep -q 'Example Registrar' <<<"$check_out" || { echo 'FAIL: registrar missing from check' >&2; exit 1; }
+grep -q 'Certificate hostname match' <<<"$check_out" || { echo 'FAIL: TLS certificate data missing from reused HTTPS probe' >&2; exit 1; }
+
+printf 'presentation: clean\n'
 printf '\nPerformance regression checks passed.\n'
