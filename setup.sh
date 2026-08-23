@@ -25,8 +25,7 @@ Environment:
                     Default: ~/.local/bin
 
 Installed command links:
-  check  ssl  dnsutil  vulncheck  sitecheck
-  dsu and dns-ssl-utilities are retained for compatibility.
+  check  ssl
 HELP
     exit 0
     ;;
@@ -77,7 +76,6 @@ if [[ "$(canonical_path "$SOURCE_ROOT")" != "$(canonical_path "$INSTALL_DIR")" ]
     setup.sh
     update.sh
     README.md
-    .README
     LICENSE
     tests
   )
@@ -122,8 +120,17 @@ auto_link() {
   printf 'link %s -> %s\n' "$dest" "$target"
 }
 
-for name in check ssl dnsutil vulncheck sitecheck dsu dns-ssl-utilities; do
+for name in check ssl; do
   auto_link "$name"
+done
+
+# Remove obsolete aliases only when they still point to this installed suite.
+for name in dnsutil vulncheck sitecheck dsu dns-ssl-utilities; do
+  dest="$BIN_DIR/$name"
+  if [[ -L "$dest" && "$(canonical_path "$dest")" == "$(canonical_path "$TARGET_ROOT/dns-ssl-utilities.sh")" ]]; then
+    rm -f -- "$dest"
+    printf 'remove obsolete command link %s\n' "$dest"
+  fi
 done
 
 printf '\nInstalled suite: %s\n' "$TARGET_ROOT"

@@ -5,8 +5,7 @@ _dsu_audit_usage() {
 ${DSU_BOLD}${DSU_CYAN}Defensive website security audit${DSU_RESET}
 
 ${DSU_BOLD}Usage${DSU_RESET}
-  ${DSU_GREEN}check audit${DSU_RESET} <domain-or-url> [options]
-  ${DSU_GREEN}vulncheck${DSU_RESET} <domain-or-url> [options]
+  ${DSU_GREEN}check${DSU_RESET} <domain-or-url> --audit [options]
 
 The default audit is low-impact and non-destructive. It reviews DNS policy,
 certificate/TLS posture, HTTP-to-HTTPS behavior, security headers, cookies,
@@ -38,11 +37,11 @@ ${DSU_BOLD}Strict-mode exit codes${DSU_RESET}
   ${DSU_RED}2${DSU_RESET}  Invalid usage, or HIGH/CRITICAL finding with --strict
 
 ${DSU_BOLD}Examples${DSU_RESET}
-  ${DSU_CYAN}vulncheck example.com${DSU_RESET}
-  ${DSU_CYAN}check audit https://example.com${DSU_RESET}
-  ${DSU_CYAN}vulncheck example.com --strict${DSU_RESET}
-  ${DSU_CYAN}vulncheck example.com --deep --authorized${DSU_RESET}
-  ${DSU_CYAN}vulncheck example.com --deep --ports --authorized${DSU_RESET}
+  ${DSU_CYAN}check example.com --audit${DSU_RESET}
+  ${DSU_CYAN}check https://example.com --audit${DSU_RESET}
+  ${DSU_CYAN}check example.com --audit --strict${DSU_RESET}
+  ${DSU_CYAN}check example.com --audit --deep --authorized${DSU_RESET}
+  ${DSU_CYAN}check example.com --audit --deep --ports --authorized${DSU_RESET}
 
 ${DSU_YELLOW}Authorization:${DSU_RESET} only use deep or port scanning against systems you own or are explicitly authorized to assess.
 EOF_HELP
@@ -127,7 +126,8 @@ _dsu_audit_dns() {
   dsu_cleanup_dir "$tmp"
 }
 _dsu_audit_tls() {
-  local host="$1" port="$2" deep="$3" tmp conn verify end days sig text bits keytype stapling compression alpn
+  local host="$1" port="$2" deep="$3" tmp conn verify end days sig text bits keytype stapling compression alpn target
+  target=$(dsu_socket_target "$host" "$port")
   dsu_section "TLS + certificate"
   tmp=$(dsu_tmpdir) || return 1
   conn=$(dsu_openssl_connection "$host" "$port")
@@ -177,7 +177,7 @@ _dsu_audit_tls() {
 -tls1_3	TLSv1.3
 VERSIONS
 
-  (timeout "$DSU_MAX_TIME" openssl s_client -status -servername "$host" -connect "$host:$port" </dev/null 2>/dev/null \
+  (timeout "$DSU_MAX_TIME" openssl s_client -status -servername "$host" -connect "$target" </dev/null 2>/dev/null \
     | awk '/OCSP response:/ {sub(/^.*OCSP response:[[:space:]]*/, ""); print; exit}' || true) >"$tmp/stapling" &
   pid_stapling=$!
 
@@ -205,7 +205,7 @@ VERSIONS
   if (( deep )); then
     if dsu_has sslscan; then
       local scan weak
-      scan=$(sslscan --no-colour "$host:$port" 2>/dev/null || true)
+      scan=$(sslscan --no-colour "$target" 2>/dev/null || true)
       weak=$(printf '%s\n' "$scan" | grep -iE 'Accepted.*(NULL|RC4|3DES|DES-CBC|EXP|anon|MD5)' | head -10 || true)
       if [[ -n "$weak" ]]; then
         dsu_finding HIGH "Weak/legacy cipher suites were accepted"
@@ -223,8 +223,8 @@ VERSIONS
 }
 
 _dsu_audit_headers() {
-  local host="$1" port="$2" base="https://$host" headers hsts maxage csp xfo nosniff referrer permissions coop corp server powered
-  [[ "$port" != 443 ]] && base="https://$host:$port"
+  local host="$1" port="$2" authority base headers hsts maxage csp xfo nosniff referrer permissions coop corp server powered
+  authority=$(dsu_url_authority "$host" "$port" 443); base="https://$authority"
   headers=$(dsu_http_final_headers "$base/")
   dsu_section "HTTP security headers"
   if [[ -z "$headers" ]]; then dsu_finding HIGH "Could not retrieve HTTPS headers"; return 0; fi
@@ -269,14 +269,14 @@ _dsu_audit_headers() {
 }
 
 _dsu_audit_http_behavior() {
-  local host="$1" port="$2" base="https://$host" tmp pid
+  local host="$1" port="$2" authority http_authority base tmp pid
   local http_headers location code trace options allow cors_headers acao acac html cookies cookie name
-  [[ "$port" != 443 ]] && base="https://$host:$port"
+  authority=$(dsu_url_authority "$host" "$port" 443); http_authority=$(dsu_url_authority "$host" 80 80); base="https://$authority"
   dsu_section "HTTP behavior + browser-facing controls"
   tmp=$(dsu_tmpdir) || return 1
 
   local -a pids=()
-  (dsu_http_headers "http://$host/" || true) >"$tmp/http" & pids+=("$!")
+  (dsu_http_headers "http://$http_authority/" || true) >"$tmp/http" & pids+=("$!")
   (dsu_http_status "$base/" -X TRACE || true) >"$tmp/trace" & pids+=("$!")
   (dsu_http_headers "$base/" -X OPTIONS || true) >"$tmp/options" & pids+=("$!")
   (dsu_http_headers "$base/" -H 'Origin: https://dns-ssl-utilities.invalid' || true) >"$tmp/cors" & pids+=("$!")
@@ -368,8 +368,8 @@ _dsu_probe_path_result() {
 }
 
 _dsu_audit_paths() {
-  local host="$1" port="$2" deep="$3" base="https://$host" tmp jobs idx pid sev msg
-  [[ "$port" != 443 ]] && base="https://$host:$port"
+  local host="$1" port="$2" deep="$3" authority base tmp jobs idx pid sev msg
+  authority=$(dsu_url_authority "$host" "$port" 443); base="https://$authority"
   dsu_section "Accidental exposure paths"
   tmp=$(dsu_tmpdir) || return 1
   jobs="${DSU_AUDIT_JOBS:-4}"
@@ -476,7 +476,7 @@ dsu_security_audit() {
       --ports) ports=1; deep=1 ;;
       --no-paths) path_checks=0 ;;
       --strict) strict=1 ;;
-      --port) [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]] || { dsu_bad "--port requires a numeric value"; return 2; }; port="$1"; shift ;;
+      --port) [[ $# -gt 0 ]] || { dsu_bad "--port requires a value"; return 2; }; port="$1"; shift ;;
       --help|-h) _dsu_audit_usage; return 0 ;;
       *) dsu_bad "Unknown audit option: $arg"; return 2 ;;
     esac
@@ -493,6 +493,7 @@ dsu_security_audit() {
   dsu_need python3 python3 || return
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; return 2; }
+  dsu_valid_port "$port" || { dsu_bad "Invalid port: $port (expected 1-65535)"; return 2; }
   dsu_find_reset
   dsu_banner
   printf '\n%s%sSecurity exposure audit:%s %s%s%s\n' "$DSU_BOLD" "$DSU_WHITE" "$DSU_RESET" "$DSU_CYAN" "$host:$port" "$DSU_RESET"

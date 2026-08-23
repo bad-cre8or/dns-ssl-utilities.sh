@@ -5,7 +5,6 @@ _dsu_ssl_usage() {
 ${DSU_BOLD}${DSU_CYAN}SSL / TLS commands${DSU_RESET}
 
 ${DSU_BOLD}Usage${DSU_RESET}
-  ${DSU_GREEN}check ssl${DSU_RESET} <command> [arguments]
   ${DSU_GREEN}ssl${DSU_RESET} <command> [arguments]
 
 ${DSU_GREEN}cert, c${DSU_RESET}             Certificate identity, validity, SANs, key and fingerprint
@@ -37,7 +36,7 @@ ${DSU_BOLD}Examples${DSU_RESET}
   ${DSU_CYAN}ssl match site.crt site.csr site.key${DSU_RESET}
   ${DSU_CYAN}ssl new example.com --san www.example.com${DSU_RESET}
 
-Run ${DSU_CYAN}ssl <command> --help${DSU_RESET} or ${DSU_CYAN}check help ssl <command>${DSU_RESET} for command-specific help.
+Run ${DSU_CYAN}ssl <command> --help${DSU_RESET} for command-specific help.
 EOF_HELP
 }
 
@@ -137,19 +136,14 @@ EOF
 }
 
 _dsu_ssl_target() {
-  local input="${1:-}" host port
-  host=$(dsu_normalize_host "$input")
-  port=$(dsu_extract_port "$input" "${2:-443}")
-  printf '%s\t%s\n' "$host" "$port"
+  dsu_target_parts "${1:-}" "${2:-}" 443
 }
 
 dsu_ssl_cert() {
   local input="${1:-}" explicit_port="${2:-}" host port tmp conn verify subject issuer start end serial fp sig pub san days
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl cert <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
-  host=$(dsu_normalize_host "$input")
-  port="${explicit_port:-$(dsu_extract_port "$input" 443)}"
-  dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; return 2; }
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "$explicit_port" 443) || { dsu_bad "Invalid host or port: ${input}${explicit_port:+ $explicit_port}"; return 2; }
   tmp=$(dsu_tmpdir) || return 1
   trap 'dsu_cleanup_dir "$tmp"' RETURN
   conn=$(dsu_openssl_connection "$host" "$port")
@@ -188,10 +182,10 @@ dsu_ssl_cert() {
 }
 
 dsu_ssl_quick() {
-  local input="${1:-}" port="${2:-443}" host tmp end days issuer
+  local input="${1:-}" port host tmp end days issuer
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl quick <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   tmp=$(dsu_tmpdir) || return 1
   if ! dsu_fetch_leaf_cert "$host" "$port" "$tmp/cert.pem"; then dsu_cleanup_dir "$tmp"; dsu_bad "$host:$port · no certificate retrieved"; return 1; fi
   end=$(openssl x509 -in "$tmp/cert.pem" -noout -enddate | cut -d= -f2-)
@@ -202,24 +196,27 @@ dsu_ssl_quick() {
 }
 
 dsu_ssl_chain() {
-  local input="${1:-}" port="${2:-443}" host
+  local input="${1:-}" port host target
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl chain <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
+  target=$(dsu_socket_target "$host" "$port")
   dsu_section "Certificate chain · $host:$port"
-  openssl s_client -servername "$host" -connect "$host:$port" -showcerts </dev/null 2>&1
+  timeout "$DSU_MAX_TIME" openssl s_client -servername "$host" -connect "$target" -showcerts </dev/null 2>&1
 }
 
 dsu_ssl_fetch() {
-  local ip="${1:-}" domain="${2:-}" port="${3:-443}" tmp conn verify end
+  local ip="${1:-}" domain="${2:-}" port="${3:-443}" tmp conn verify end target authority resolve_ip
   [[ -n "$ip" && -n "$domain" ]] || { dsu_bad "Usage: ssl fetch <server-ip> <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
   dsu_need curl curl || return
   domain=$(dsu_normalize_host "$domain")
   dsu_is_ip "$ip" || { dsu_bad "Invalid server IP: $ip"; return 2; }
   dsu_valid_host "$domain" || { dsu_bad "Invalid domain: $domain"; return 2; }
+  dsu_valid_port "$port" || { dsu_bad "Invalid port: $port"; return 2; }
+  target=$(dsu_socket_target "$ip" "$port")
   tmp=$(dsu_tmpdir) || return 1
-  conn=$(timeout "$DSU_MAX_TIME" openssl s_client -servername "$domain" -connect "$ip:$port" -showcerts </dev/null 2>&1)
+  conn=$(timeout "$DSU_MAX_TIME" openssl s_client -servername "$domain" -connect "$target" -showcerts </dev/null 2>&1)
   printf '%s\n' "$conn" | openssl x509 -outform PEM >"$tmp/leaf.pem" 2>/dev/null || true
   dsu_section "SNI endpoint · $domain → $ip:$port"
   if [[ ! -s "$tmp/leaf.pem" ]]; then dsu_bad "No certificate retrieved"; dsu_cleanup_dir "$tmp"; return 1; fi
@@ -228,20 +225,23 @@ dsu_ssl_fetch() {
   dsu_keyval "Expires" "$end"
   dsu_keyval "OpenSSL verify" "${verify:-unknown}"
   if openssl x509 -in "$tmp/leaf.pem" -noout -checkhost "$domain" >/dev/null 2>&1; then dsu_ok "Certificate matches $domain"; else dsu_bad "Certificate does not match $domain"; fi
-  if curl -fsSI --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" --resolve "$domain:$port:$ip" "https://$domain:$port/" >/dev/null 2>&1; then dsu_ok "curl CA + hostname validation passed against $ip"; else dsu_warn "curl validation/request failed against $ip"; fi
+  authority=$(dsu_url_authority "$domain" "$port" 443)
+  resolve_ip="$ip"; [[ "$ip" == *:* ]] && resolve_ip="[$ip]"
+  if curl -fsSI --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" --resolve "$domain:$port:$resolve_ip" "https://$authority/" >/dev/null 2>&1; then dsu_ok "curl CA + hostname validation passed against $ip"; else dsu_warn "curl validation/request failed against $ip"; fi
   dsu_cleanup_dir "$tmp"
 }
 
 _dsu_tls_probe() {
-  local flag="$1" host="$2" port="$3"
-  timeout "$DSU_MAX_TIME" openssl s_client "$flag" -servername "$host" -connect "$host:$port" </dev/null 2>&1 | grep -qE '^Protocol *:|^ *Protocol *:'
+  local flag="$1" host="$2" port="$3" target
+  target=$(dsu_socket_target "$host" "$port")
+  timeout "$DSU_MAX_TIME" openssl s_client "$flag" -servername "$host" -connect "$target" </dev/null 2>&1 | grep -qE '^Protocol *:|^ *Protocol *:'
 }
 
 dsu_ssl_versions() {
-  local input="${1:-}" port="${2:-443}" host flag label
+  local input="${1:-}" port host flag label
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl versions <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   dsu_section "TLS versions · $host:$port"
   while IFS=$'\t' read -r flag label; do
     if openssl s_client -help 2>&1 | grep -q -- "$flag"; then
@@ -263,12 +263,13 @@ VERSIONS
 }
 
 dsu_ssl_ciphers() {
-  local input="${1:-}" port="${2:-443}" host
+  local input="${1:-}" port host target
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl ciphers <domain> [port]"; return 2; }
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
+  target=$(dsu_socket_target "$host" "$port")
   dsu_section "Cipher enumeration · $host:$port"
   if dsu_has sslscan; then
-    sslscan --no-colour "$host:$port"
+    sslscan --no-colour "$target"
   elif dsu_has nmap; then
     nmap -Pn -p "$port" --script ssl-enum-ciphers "$host"
   else
@@ -278,11 +279,12 @@ dsu_ssl_ciphers() {
 }
 
 dsu_ssl_scan() {
-  local input="${1:-}" port="${2:-443}" host
+  local input="${1:-}" port host target
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl scan <domain> [port]"; return 2; }
   dsu_need sslscan sslscan || return
-  host=$(dsu_normalize_host "$input")
-  sslscan "$host:$port"
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
+  target=$(dsu_socket_target "$host" "$port")
+  sslscan "$target"
 }
 
 _dsu_extract_chain_files() {
@@ -295,10 +297,10 @@ _dsu_extract_chain_files() {
 }
 
 dsu_ssl_ocsp() {
-  local input="${1:-}" port="${2:-443}" host tmp conn uri issuer
+  local input="${1:-}" port host tmp conn uri issuer output rc
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl ocsp <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   tmp=$(dsu_tmpdir) || return 1
   conn=$(dsu_openssl_connection "$host" "$port")
   _dsu_extract_chain_files "$conn" "$tmp"
@@ -309,27 +311,57 @@ dsu_ssl_ocsp() {
   dsu_keyval "Responder" "$uri"
   issuer="$tmp/cert-02.pem"
   if [[ ! -s "$issuer" ]]; then dsu_warn "Server did not send an issuer certificate; cannot construct direct OCSP request"; dsu_cleanup_dir "$tmp"; return 1; fi
-  openssl ocsp -no_nonce -issuer "$issuer" -cert "$tmp/cert-01.pem" -url "$uri" -CAfile /etc/ssl/certs/ca-certificates.crt 2>&1 | sed 's/^/  /'
+  output=$(timeout "$DSU_MAX_TIME" openssl ocsp -no_nonce -timeout "$DSU_CONNECT_TIMEOUT" \
+    -issuer "$issuer" -cert "$tmp/cert-01.pem" -url "$uri" -verify_other "$issuer" 2>&1)
+  rc=$?
+  printf '%s\n' "$output" | sed 's/^/  /'
+  if (( rc == 124 )); then dsu_bad "OCSP responder timed out"; dsu_cleanup_dir "$tmp"; return 1
+  elif (( rc != 0 )); then dsu_bad "OCSP status is unknown because the response could not be verified"; dsu_cleanup_dir "$tmp"; return 1
+  elif printf '%s\n' "$output" | grep -qiE ': revoked([[:space:]]|$)'; then dsu_bad "Certificate is REVOKED"; dsu_cleanup_dir "$tmp"; return 2
+  elif printf '%s\n' "$output" | grep -qiE ': good([[:space:]]|$)'; then dsu_ok "Certificate status is GOOD (verified OCSP response)"
+  else dsu_warn "OCSP response was verified but did not contain a recognized certificate status"; dsu_cleanup_dir "$tmp"; return 1
+  fi
   dsu_cleanup_dir "$tmp"
 }
 
 dsu_ssl_crl() {
-  local input="${1:-}" port="${2:-443}" host tmp uri serial format
+  local input="${1:-}" port host tmp uri serial format conn issuer leaf_issuer crl_issuer
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl crl <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
   dsu_need curl curl || return
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   tmp=$(dsu_tmpdir) || return 1
-  if ! dsu_fetch_leaf_cert "$host" "$port" "$tmp/leaf.pem"; then dsu_bad "Could not retrieve certificate"; dsu_cleanup_dir "$tmp"; return 1; fi
+  conn=$(dsu_openssl_connection "$host" "$port")
+  _dsu_extract_chain_files "$conn" "$tmp"
+  [[ -s "$tmp/cert-01.pem" ]] || { dsu_bad "Could not retrieve certificate"; dsu_cleanup_dir "$tmp"; return 1; }
+  cp -- "$tmp/cert-01.pem" "$tmp/leaf.pem"
+  issuer="$tmp/cert-02.pem"
   uri=$(openssl x509 -in "$tmp/leaf.pem" -noout -text | awk '/CRL Distribution Points:/{incrl=1; next} incrl && /URI:/{sub(/.*URI:/,""); print; exit} incrl && /^[^ ]/{exit}')
   dsu_section "CRL · $host:$port"
   [[ -n "$uri" ]] || { dsu_info "No CRL Distribution Point advertised"; dsu_cleanup_dir "$tmp"; return 1; }
   dsu_keyval "Distribution point" "$uri"
   if ! curl -fsSL --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time 20 -A "$DSU_USER_AGENT" "$uri" -o "$tmp/crl"; then dsu_bad "Could not download CRL"; dsu_cleanup_dir "$tmp"; return 1; fi
-  format=PEM
-  openssl crl -in "$tmp/crl" -noout >/dev/null 2>&1 || format=DER
+  if openssl crl -in "$tmp/crl" -inform PEM -noout >/dev/null 2>&1; then format=PEM
+  elif openssl crl -in "$tmp/crl" -inform DER -noout >/dev/null 2>&1; then format=DER
+  else dsu_bad "Downloaded CRL is malformed or unsupported; revocation status is UNKNOWN"; dsu_cleanup_dir "$tmp"; return 1
+  fi
+  [[ -s "$issuer" ]] || { dsu_bad "Server did not provide the issuer certificate; CRL status is UNKNOWN"; dsu_cleanup_dir "$tmp"; return 1; }
+  leaf_issuer=$(openssl x509 -in "$tmp/leaf.pem" -noout -issuer -nameopt RFC2253 2>/dev/null | sed 's/^issuer=//')
+  crl_issuer=$(openssl crl -in "$tmp/crl" -inform "$format" -noout -issuer -nameopt RFC2253 2>/dev/null | sed 's/^issuer=//')
+  [[ -n "$leaf_issuer" && "$leaf_issuer" == "$crl_issuer" ]] || { dsu_bad "CRL issuer does not match the certificate issuer; status is UNKNOWN"; dsu_cleanup_dir "$tmp"; return 1; }
+  if ! openssl crl -in "$tmp/crl" -inform "$format" -noout -verify -CAfile "$issuer" >/dev/null 2>&1; then
+    dsu_bad "CRL signature verification failed; revocation status is UNKNOWN"
+    dsu_cleanup_dir "$tmp"
+    return 1
+  fi
   serial=$(openssl x509 -in "$tmp/leaf.pem" -noout -serial | cut -d= -f2 | tr -d ':')
-  if openssl crl -in "$tmp/crl" -inform "$format" -noout -text 2>/dev/null | tr -d ':' | grep -qi "Serial Number: *$serial"; then dsu_bad "Certificate serial is listed as REVOKED"; else dsu_ok "Certificate serial not found in downloaded CRL"; fi
+  if openssl crl -in "$tmp/crl" -inform "$format" -noout -text 2>/dev/null | tr -d ':' | grep -qi "Serial Number *$serial"; then
+    dsu_bad "Certificate serial is listed as REVOKED"
+    dsu_cleanup_dir "$tmp"
+    return 2
+  else
+    dsu_ok "Certificate serial not found in a verified CRL"
+  fi
   dsu_cleanup_dir "$tmp"
 }
 
@@ -361,18 +393,20 @@ dsu_ssl_headers() {
 }
 
 dsu_ssl_performance() {
-  local input="${1:-}" port="${2:-443}" seconds="${3:-5}" host
+  local input="${1:-}" port seconds="${3:-5}" host target
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl performance <domain> [port] [seconds]"; return 2; }
   dsu_need openssl openssl || return
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
+  [[ "$seconds" =~ ^[1-9][0-9]*$ && "$seconds" -le 300 ]] || { dsu_bad "Seconds must be between 1 and 300"; return 2; }
+  target=$(dsu_socket_target "$host" "$port")
   dsu_section "TLS handshake benchmark · $host:$port"
-  openssl s_time -connect "$host:$port" -new -www / -time "$seconds"
+  openssl s_time -connect "$target" -new -www / -time "$seconds"
 }
 
 dsu_ssl_fingerprint() {
-  local input="${1:-}" expected="${2:-}" port="${3:-443}" host tmp fp norm_expected norm_actual
+  local input="${1:-}" expected="${2:-}" port host tmp fp norm_expected norm_actual
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl fingerprint <domain> [expected-sha256] [port]"; return 2; }
-  host=$(dsu_normalize_host "$input")
+  IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${3:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   tmp=$(dsu_tmpdir) || return 1
   if ! dsu_fetch_leaf_cert "$host" "$port" "$tmp/cert.pem"; then dsu_bad "Could not retrieve certificate"; dsu_cleanup_dir "$tmp"; return 1; fi
   fp=$(openssl x509 -in "$tmp/cert.pem" -noout -sha256 -fingerprint | cut -d= -f2-)
@@ -455,7 +489,15 @@ dsu_ssl_new() {
     esac
   done
   local key="${prefix}.key" csr="${prefix}.csr" san_csv='' name
-  for name in "${sans[@]}"; do [[ -n "$san_csv" ]] && san_csv+=","; san_csv+="DNS:$name"; done
+  dsu_valid_host "$cn" || { dsu_bad "Invalid common name: $cn"; return 2; }
+  [[ "$bits" =~ ^[0-9]+$ && "$bits" -ge 2048 && "$bits" -le 16384 ]] || { dsu_bad "RSA bits must be between 2048 and 16384"; return 2; }
+  [[ "$curve" =~ ^[A-Za-z0-9._-]+$ ]] || { dsu_bad "Invalid EC curve name"; return 2; }
+  [[ ! -e "$key" && ! -L "$key" && ! -e "$csr" && ! -L "$csr" ]] || { dsu_bad "Refusing to overwrite existing key or CSR (choose another --out prefix)"; return 2; }
+  for name in "${sans[@]}"; do
+    dsu_valid_host "$name" || { dsu_bad "Invalid SAN: $name"; return 2; }
+    [[ -n "$san_csv" ]] && san_csv+=","
+    if dsu_is_ip "$name"; then san_csv+="IP:$name"; else san_csv+="DNS:$name"; fi
+  done
   dsu_section "Create CSR · $cn"
   if [[ "$key_type" == rsa ]]; then
     if (( encrypted )); then openssl genpkey -quiet -algorithm RSA -pkeyopt "rsa_keygen_bits:$bits" -aes-256-cbc -out "$key" || return 1
@@ -495,6 +537,7 @@ dsu_ssl_pack() {
   if [[ -n "$chain" && ! -f "$chain" ]]; then
     if [[ "$chain" == *.pfx || "$chain" == *.p12 ]]; then out="$chain"; chain=""; else dsu_bad "Chain file not found: $chain"; return 2; fi
   fi
+  [[ ! -e "$out" && ! -L "$out" ]] || { dsu_bad "Refusing to overwrite existing bundle: $out"; return 2; }
   local password="${DSU_PFX_PASSWORD:-}" confirm=""
   if [[ -z "${DSU_PFX_PASSWORD+x}" ]]; then
     printf '%s' "PFX password (blank allowed): " >&2
@@ -522,15 +565,18 @@ dsu_ssl_extract() {
   [[ -f "$pfx" ]] || { dsu_bad "Usage: ssl extract <bundle.pfx> [output-directory]"; return 2; }
   dsu_need openssl openssl || return
   if [[ -z "$outdir" ]]; then outdir="${pfx##*/}"; outdir="${outdir%.*}-extracted"; fi
-  mkdir -p "$outdir"
+  [[ ! -e "$outdir" && ! -L "$outdir" ]] || { dsu_bad "Refusing to overwrite existing extraction directory: $outdir"; return 2; }
+  mkdir -p "$outdir" || return 1
+  chmod 700 "$outdir" || { dsu_cleanup_dir "$outdir"; return 1; }
   local password
   printf '%s' "PFX password (blank if none): " >&2
   IFS= read -rs password; printf '\n' >&2
   export DSU_PFX_PASS="$password"
   dsu_section "Extract PKCS#12 · $pfx"
-  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -clcerts -nokeys -out "$outdir/certificate.pem" || { unset DSU_PFX_PASS; return 1; }
+  : >"$outdir/private-key.pem"; chmod 600 "$outdir/private-key.pem"
+  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -clcerts -nokeys -out "$outdir/certificate.pem" || { unset DSU_PFX_PASS; dsu_cleanup_dir "$outdir"; return 1; }
   openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -cacerts -nokeys -out "$outdir/ca-chain.pem" || true
-  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -nocerts -nodes -out "$outdir/private-key.pem" || { unset DSU_PFX_PASS; return 1; }
+  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -nocerts -nodes -out "$outdir/private-key.pem" || { unset DSU_PFX_PASS; dsu_cleanup_dir "$outdir"; return 1; }
   unset DSU_PFX_PASS password
   chmod 600 "$outdir/private-key.pem"
   [[ -s "$outdir/ca-chain.pem" ]] || rm -f "$outdir/ca-chain.pem"

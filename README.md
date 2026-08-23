@@ -118,57 +118,44 @@ check example.com --no-rdns
 # 🧭 Command Overview
 
 ```text
-check <domain>
+check <domain> [flags]
+ssl <command> [flags]
 
-check dns <command> <target>
-check ssl <command> <target>
-check audit <target>
-
-check doctor
-check help
+check --doctor
 check --help
 check --version
 ```
 
-Convenience commands are also installed:
+Only two command links are installed:
 
 ```text
-dnsutil
+check
 ssl
-vulncheck
 ```
-
-`dsu` remains available as a compatibility alias for existing scripts and installations.
 
 ---
 
 # 🌍 DNS
 
-View DNS help:
+View all domain and DNS flags:
 
 ```bash
-check dns --help
-```
-
-or:
-
-```bash
-dnsutil --help
+check --help
 ```
 
 ## 🔎 DNS Records
 
 ```bash
-dnsutil lookup example.com
-dnsutil l example.com
+check example.com --dns
+check example.com --dns
 ```
 
 Query a specific record type:
 
 ```bash
-dnsutil lookup example.com MX
-dnsutil lookup example.com TXT
-dnsutil lookup example.com CAA
+check example.com --dns MX
+check example.com --dns TXT
+check example.com --dns CAA
 ```
 
 Supported record types include:
@@ -189,14 +176,14 @@ SOA
 ## 🔁 Reverse DNS / PTR
 
 ```bash
-dnsutil reverse 203.0.113.10
-dnsutil r 203.0.113.10
+check 203.0.113.10 --reverse
+check 203.0.113.10 --reverse
 ```
 
 IPv6 is supported:
 
 ```bash
-dnsutil r 2001:db8::10
+check 2001:db8::10 --reverse
 ```
 
 PTR results are classified explicitly:
@@ -212,8 +199,8 @@ Timeouts, `SERVFAIL`, unreachable resolvers, and transport errors are never pres
 ## 📬 Mail DNS & Policy
 
 ```bash
-dnsutil mail example.com
-dnsutil m example.com
+check example.com --mail
+check example.com --mail
 ```
 
 Checks include:
@@ -233,7 +220,7 @@ Checks include:
 ## 🛡️ DNSSEC
 
 ```bash
-dnsutil dnssec example.com
+check example.com --dnssec
 ```
 
 Checks DNSSEC records and resolver validation.
@@ -243,8 +230,8 @@ Checks DNSSEC records and resolver validation.
 ## 🧱 Delegation Trace
 
 ```bash
-dnsutil trace example.com
-dnsutil t example.com
+check example.com --trace
+check example.com --trace
 ```
 
 Useful for diagnosing:
@@ -260,8 +247,8 @@ Useful for diagnosing:
 ## 🧾 WHOIS & Registrar
 
 ```bash
-dnsutil whois example.com
-dnsutil w example.com
+check example.com --whois
+check example.com --whois
 ```
 
 Registrar detection uses a conservative WHOIS sequence designed to handle the inconsistent formats returned by different registries.
@@ -280,8 +267,8 @@ WHOIS operations use bounded timeouts so a slow registry cannot hang indefinitel
 ## 🏢 Hosting Provider Detection
 
 ```bash
-dnsutil hosting example.com
-dnsutil h example.com
+check example.com --hosting
+check example.com --hosting
 ```
 
 Provider detection uses available signals such as:
@@ -307,7 +294,7 @@ ssl --help
 or:
 
 ```bash
-check ssl --help
+ssl --help
 ```
 
 Most SSL commands also have short aliases.
@@ -366,7 +353,7 @@ Displays the certificate chain served by the remote endpoint.
 ## 🎯 Test SNI Against a Specific IP
 
 ```bash
-ssl fetch example.com 203.0.113.10
+ssl fetch 203.0.113.10 example.com
 ```
 
 Connects directly to the specified IP while still sending the hostname through SNI.
@@ -463,6 +450,9 @@ The SSL toolkit also works with local certificate material.
 ssl new example.com
 ```
 
+Existing key or CSR files are never overwritten. Choose a different `--out`
+prefix if either destination already exists.
+
 See all options:
 
 ```bash
@@ -511,6 +501,9 @@ ssl pk certificate.pem private.key output.pfx
 ssl extract certificate.pfx
 ```
 
+Extraction creates a new private directory and refuses to reuse an existing
+destination. The unencrypted private key is written with mode `0600`.
+
 ---
 
 # 🌐 HTTP / HTTPS Diagnostics
@@ -542,13 +535,7 @@ Use the dedicated site or audit commands when you need deeper HTTP analysis.
 Run the standard audit:
 
 ```bash
-vulncheck example.com
-```
-
-or:
-
-```bash
-check audit example.com
+check example.com --audit
 ```
 
 The normal audit is designed to be **low-impact and non-destructive**.
@@ -683,7 +670,7 @@ Checks may include:
 For systems you own or are explicitly authorized to assess:
 
 ```bash
-vulncheck example.com --deep --authorized
+check example.com --audit --deep --authorized
 ```
 
 Deep mode can add checks such as:
@@ -696,7 +683,7 @@ Deep mode can add checks such as:
 Optional top-100 TCP port inventory:
 
 ```bash
-vulncheck example.com --deep --ports --authorized
+check example.com --audit --deep --ports --authorized
 ```
 
 > ⚠️ **Only run deep scans against infrastructure you own or have explicit permission to assess.**
@@ -718,7 +705,7 @@ Normal audits report findings without necessarily causing the command itself to 
 For automation or CI:
 
 ```bash
-vulncheck example.com --strict
+check example.com --audit --strict
 ```
 
 Inspect the result:
@@ -745,7 +732,7 @@ Without `--strict`, findings may still be present when the command exits with `0
 Check the local environment:
 
 ```bash
-check doctor
+check --doctor
 ```
 
 Common dependencies:
@@ -847,9 +834,9 @@ check --help
 Then drill down:
 
 ```bash
-check dns --help
-check ssl --help
-check audit --help
+check example.com --dns MX
+check example.com --audit --help
+ssl --help
 ```
 
 Command-specific help is available too:
@@ -858,14 +845,6 @@ Command-specific help is available too:
 ssl cert --help
 ssl new --help
 ssl pack --help
-```
-
-Alternative help syntax:
-
-```bash
-check help
-check help ssl
-check help ssl cert
 ```
 
 ---
@@ -928,43 +907,43 @@ ssl c example.com
 ### Diagnose mail DNS
 
 ```bash
-dnsutil m example.com
+check example.com --mail
 ```
 
 ### Trace DNS delegation
 
 ```bash
-dnsutil t example.com
+check example.com --trace
 ```
 
 ### Check reverse DNS
 
 ```bash
-dnsutil r 203.0.113.10
+check 203.0.113.10 --reverse
 ```
 
 ### Run a defensive audit
 
 ```bash
-vulncheck example.com
+check example.com --audit
 ```
 
 ### Run an authorized deep audit
 
 ```bash
-vulncheck example.com --deep --authorized
+check example.com --audit --deep --authorized
 ```
 
 ### Include port discovery
 
 ```bash
-vulncheck example.com --deep --ports --authorized
+check example.com --audit --deep --ports --authorized
 ```
 
 ### Diagnose the local environment
 
 ```bash
-check doctor
+check --doctor
 ```
 
 ---
@@ -1060,7 +1039,7 @@ sudo apt install curl openssl dnsutils whois python3
 Then verify everything with:
 
 ```bash
-check doctor
+check --doctor
 ```
 
 ---
@@ -1092,9 +1071,9 @@ check example.com
 If the problem looks DNS-related:
 
 ```bash
-dnsutil l example.com
-dnsutil t example.com
-dnsutil m example.com
+check example.com --dns
+check example.com --trace
+check example.com --mail
 ```
 
 If it looks TLS-related:
@@ -1108,13 +1087,13 @@ ssl ch example.com
 For a defensive security review:
 
 ```bash
-vulncheck example.com
+check example.com --audit
 ```
 
 For an approved deeper assessment:
 
 ```bash
-vulncheck example.com --deep --authorized
+check example.com --audit --deep --authorized
 ```
 
 ---

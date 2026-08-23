@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime and lint dependencies
+        run: sudo apt-get update && sudo apt-get install -y curl openssl dnsutils whois python3 shellcheck
+      - name: ShellCheck
+        # SC2015 is intentionally used for concise presentation-only branches;
+        # SC2034 is a false positive for color globals consumed by sourced files.
+        run: shellcheck -e SC2015,SC2016,SC2034 dns-ssl-utilities.sh setup.sh update.sh lib/*.sh tests/*.sh
+      - name: Smoke tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: ./tests/smoke.sh
+      - name: Performance regression tests
+        run: ./tests/performance.sh

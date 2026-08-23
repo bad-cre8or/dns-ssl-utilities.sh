@@ -2,25 +2,21 @@
 
 _dsu_site_usage() {
   cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}Website diagnostics${DSU_RESET}
+${DSU_BOLD}${DSU_CYAN}Domain check${DSU_RESET}
 
-The primary site overview is simply:
-  ${DSU_GREEN}check <domain> [--no-rdns]${DSU_RESET}
+Usage:
+  ${DSU_GREEN}check <domain> [flags]${DSU_RESET}
 
-Additional site commands:
-  ${DSU_GREEN}check site headers${DSU_RESET} <domain-or-url>
-  ${DSU_GREEN}check site redirects${DSU_RESET} <domain-or-url>
-  ${DSU_GREEN}check site status${DSU_RESET} <domain>
-
-Compatibility frontend:
-  ${DSU_GREEN}sitecheck${DSU_RESET} <domain>
-  ${DSU_GREEN}sitecheck${DSU_RESET} <headers|redirects|status> ...
+Flags:
+  --no-rdns  --dns [TYPE]  --reverse  --mail [selector]
+  --dnssec   --trace       --whois    --hosting
+  --audit [--deep --authorized --ports --strict]
 
 ${DSU_BOLD}Examples${DSU_RESET}
   ${DSU_CYAN}check example.com${DSU_RESET}
   ${DSU_CYAN}check example.com --no-rdns${DSU_RESET}
-  ${DSU_CYAN}check site headers example.com${DSU_RESET}
-  ${DSU_CYAN}check site redirects http://example.com${DSU_RESET}
+  ${DSU_CYAN}check example.com --dns MX${DSU_RESET}
+  ${DSU_CYAN}check example.com --audit${DSU_RESET}
 EOF_HELP
 }
 
@@ -38,9 +34,6 @@ Options:
   --no-rdns  Skip PTR lookups for the lowest possible latency
 EOF
       ;;
-    headers|header|h) printf '%b\n' "${DSU_BOLD}Site headers${DSU_RESET}\nUsage: check site headers <domain-or-url>\nShortcut: sitecheck headers <domain-or-url>" ;;
-    redirects|redirect|r) printf '%b\n' "${DSU_BOLD}Redirect chain${DSU_RESET}\nUsage: check site redirects <domain-or-url>\nShortcut: sitecheck redirects <domain-or-url>" ;;
-    status|s) printf '%b\n' "${DSU_BOLD}Site status${DSU_RESET}\nUsage: check site status <domain>\nShortcut: sitecheck status <domain>" ;;
     *) _dsu_site_usage ;;
   esac
 }
@@ -130,7 +123,8 @@ _dsu_site_registrar_probe() {
 }
 
 _dsu_site_curl_probe() {
-  local scheme="$1" host="$2" prefix="$3"
+  local scheme="$1" host="$2" prefix="$3" authority
+  authority=$(dsu_url_authority "$host" "" "")
   local writeout=$'code=%{http_code}\nurl=%{url_effective}\n'
   if [[ "$scheme" == https ]]; then
     # Reuse the HTTPS transfer for leaf-certificate data. No second TLS handshake
@@ -139,7 +133,7 @@ _dsu_site_curl_probe() {
   fi
   curl -ksS -D "$prefix.headers" -o /dev/null \
     --connect-timeout "$DSU_CHECK_CONNECT_TIMEOUT" --max-time "$DSU_CHECK_MAX_TIME" \
-    -A "$DSU_USER_AGENT" -w "$writeout" "$scheme://$host/" \
+    -A "$DSU_USER_AGENT" -w "$writeout" "$scheme://$authority/" \
     >"$prefix.meta" 2>"$prefix.err"
 }
 
@@ -159,8 +153,9 @@ _dsu_site_extract_leaf_cert() {
 }
 
 _dsu_site_fetch_leaf_fallback() {
-  local host="$1" out="$2"
-  timeout "$DSU_CHECK_MAX_TIME" openssl s_client -servername "$host" -connect "$host:443" </dev/null 2>/dev/null \
+  local host="$1" out="$2" target
+  target=$(dsu_socket_target "$host" 443)
+  timeout "$DSU_CHECK_MAX_TIME" openssl s_client -servername "$host" -connect "$target" </dev/null 2>/dev/null \
     | openssl x509 -outform PEM >"$out" 2>/dev/null
   [[ -s "$out" ]]
 }
@@ -175,18 +170,44 @@ _dsu_site_print_http_code() {
 }
 
 dsu_site_check() {
-  local input="${1:-}" host tmp no_rdns=0
+  local input="${1:-}" host tmp no_rdns=0 mode='' mode_arg=''
   [[ -n "$input" ]] || { dsu_bad "Usage: check <domain> [--no-rdns]"; return 2; }
   shift || true
   while (( $# )); do
     case "$1" in
       --no-rdns|--no-ptr) no_rdns=1 ;;
+      --dns)
+        [[ -z "$mode" ]] || { dsu_bad "Use one utility flag per check invocation"; return 2; }
+        mode=dns
+        if [[ -n "${2:-}" && "${2:-}" != --* ]]; then mode_arg="$2"; shift; fi
+        ;;
+      --reverse|--rdns) [[ -z "$mode" ]] || { dsu_bad "Use one utility flag per check invocation"; return 2; }; mode=reverse ;;
+      --mail) [[ -z "$mode" ]] || { dsu_bad "Use one utility flag per check invocation"; return 2; }; mode=mail; if [[ -n "${2:-}" && "${2:-}" != --* ]]; then mode_arg="$2"; shift; fi ;;
+      --dnssec) [[ -z "$mode" ]] || { dsu_bad "Use one utility flag per check invocation"; return 2; }; mode=dnssec ;;
+      --trace) [[ -z "$mode" ]] || { dsu_bad "Use one utility flag per check invocation"; return 2; }; mode=trace ;;
+      --whois) [[ -z "$mode" ]] || { dsu_bad "Use one utility flag per check invocation"; return 2; }; mode=whois ;;
+      --hosting) [[ -z "$mode" ]] || { dsu_bad "Use one utility flag per check invocation"; return 2; }; mode=hosting ;;
+      --audit)
+        shift
+        dsu_security_audit "$input" "$@"
+        return
+        ;;
       --fresh) ;; # accepted for backward compatibility; registrar data is no longer cached
       -h|--help) _dsu_site_leaf_help check; return 0 ;;
       *) dsu_bad "Unknown check option: $1"; return 2 ;;
     esac
     shift
   done
+
+  case "$mode" in
+    dns) dsu_dns_lookup "$input" "${mode_arg:-ALL}"; return ;;
+    reverse) dsu_dns_reverse "$input"; return ;;
+    mail) dsu_dns_mail "$input" "$mode_arg"; return ;;
+    dnssec) dsu_dns_dnssec "$input"; return ;;
+    trace) dsu_dns_trace "$input"; return ;;
+    whois) dsu_dns_whois "$input"; return ;;
+    hosting) dsu_dns_hosting "$input"; return ;;
+  esac
 
   dsu_need dig dnsutils || return
   dsu_need curl curl || return
@@ -410,7 +431,7 @@ dsu_site_headers() {
 
 dsu_site_redirects() {
   local input="${1:-}" url
-  [[ -n "$input" ]] || { dsu_bad "Usage: check site redirects <url-or-domain>"; return 2; }
+  [[ -n "$input" ]] || { dsu_bad "A URL or domain is required"; return 2; }
   dsu_need curl curl || return
   url="$input"; [[ "$url" == http://* || "$url" == https://* ]] || url="http://$url"
   dsu_section "Redirect chain · $url"
@@ -420,14 +441,15 @@ dsu_site_redirects() {
 }
 
 dsu_site_status() {
-  local input="${1:-}" host tmp end days pid_http pid_https pid_tls http https
-  [[ -n "$input" ]] || { dsu_bad "Usage: check site status <domain>"; return 2; }
+  local input="${1:-}" host authority tmp end days pid_http pid_https pid_tls http https
+  [[ -n "$input" ]] || { dsu_bad "A domain is required"; return 2; }
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; return 2; }
+  authority=$(dsu_url_authority "$host" "" "")
   tmp=$(dsu_tmpdir) || return 1
 
-  (dsu_http_status "http://$host/" || true) >"$tmp/http" & pid_http=$!
-  (dsu_http_status "https://$host/" || true) >"$tmp/https" & pid_https=$!
+  (dsu_http_status "http://$authority/" || true) >"$tmp/http" & pid_http=$!
+  (dsu_http_status "https://$authority/" || true) >"$tmp/https" & pid_https=$!
   (dsu_fetch_leaf_cert "$host" 443 "$tmp/cert.pem" || true) >/dev/null 2>&1 & pid_tls=$!
   wait "$pid_http" 2>/dev/null || true
   wait "$pid_https" 2>/dev/null || true

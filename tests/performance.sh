@@ -140,9 +140,9 @@ export DSU_TEST_DELAY=0.20
 export XDG_CACHE_HOME="$TMP/cache"
 
 check_ms=$(measure_ms check --no-color --ascii example.test)
-lookup_ms=$(measure_ms "$SUITE" --no-color --ascii dns lookup example.test)
-mail_ms=$(measure_ms "$SUITE" --no-color --ascii dns mail example.test)
-reverse_ms=$(measure_ms "$SUITE" --no-color --ascii dns reverse example.test)
+lookup_ms=$(measure_ms "$TMP/bin/check" example.test --no-color --ascii --dns)
+mail_ms=$(measure_ms "$TMP/bin/check" example.test --no-color --ascii --mail)
+reverse_ms=$(measure_ms "$TMP/bin/check" example.test --no-color --ascii --reverse)
 
 printf 'check:       %d ms\n' "$check_ms"
 printf 'dns lookup:  %d ms\n' "$lookup_ms"

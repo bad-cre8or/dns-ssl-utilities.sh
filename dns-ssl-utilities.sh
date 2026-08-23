@@ -20,10 +20,10 @@ _dsu_main_help() {
 
 ${DSU_BOLD}Usage${DSU_RESET}
   ${DSU_GREEN}check${DSU_RESET} <domain> [--no-rdns]
-  ${DSU_GREEN}check dns${DSU_RESET} <command> [arguments]
-  ${DSU_GREEN}check ssl${DSU_RESET} <command> [arguments]
-  ${DSU_GREEN}check audit${DSU_RESET} <target> [options]
-  ${DSU_GREEN}check doctor${DSU_RESET}
+  ${DSU_GREEN}check${DSU_RESET} <domain> --dns [TYPE]
+  ${DSU_GREEN}ssl${DSU_RESET} <command> [arguments]
+  ${DSU_GREEN}check${DSU_RESET} <target> --audit [options]
+  ${DSU_GREEN}check --doctor${DSU_RESET}
 
 ${DSU_BOLD}Fast domain overview${DSU_RESET}
   ${DSU_GREEN}check <domain>${DSU_RESET}              Registrar, DNS, mail policy, hosting, TLS,
@@ -31,13 +31,13 @@ ${DSU_BOLD}Fast domain overview${DSU_RESET}
   ${DSU_GREEN}--no-rdns${DSU_RESET}                  Skip PTR lookups for the lowest latency.
 
 ${DSU_BOLD}${DSU_BLUE}DNS${DSU_RESET}  ${DSU_GRAY}records, mail policy, DNSSEC, WHOIS and hosting${DSU_RESET}
-  ${DSU_GREEN}dns lookup, l${DSU_RESET}              A/AAAA/MX/NS/TXT/CAA/SOA/CNAME records
-  ${DSU_GREEN}dns reverse, ptr, r${DSU_RESET}        Reverse DNS / PTR
-  ${DSU_GREEN}dns mail, m${DSU_RESET}                SPF, DMARC, DKIM, MTA-STS and TLS-RPT
-  ${DSU_GREEN}dns dnssec, ds${DSU_RESET}             DNSSEC records + resolver validation
-  ${DSU_GREEN}dns trace, t${DSU_RESET}               Delegation trace
-  ${DSU_GREEN}dns whois, w${DSU_RESET}               Registrar, dates and domain status
-  ${DSU_GREEN}dns hosting, h${DSU_RESET}             Best-effort hosting/provider identification
+  ${DSU_GREEN}--dns [TYPE]${DSU_RESET}               A/AAAA/MX/NS/TXT/CAA/SOA/CNAME records
+  ${DSU_GREEN}--reverse${DSU_RESET}                  Reverse DNS / PTR
+  ${DSU_GREEN}--mail [selector]${DSU_RESET}           SPF, DMARC, DKIM, MTA-STS and TLS-RPT
+  ${DSU_GREEN}--dnssec${DSU_RESET}                   DNSSEC records + resolver validation
+  ${DSU_GREEN}--trace${DSU_RESET}                    Delegation trace
+  ${DSU_GREEN}--whois${DSU_RESET}                    Registrar, dates and domain status
+  ${DSU_GREEN}--hosting${DSU_RESET}                  Best-effort hosting/provider identification
 
 ${DSU_BOLD}${DSU_MAGENTA}SSL / TLS${DSU_RESET}  ${DSU_GRAY}live endpoints + certificate/key tools${DSU_RESET}
   ${DSU_GREEN}ssl cert, c${DSU_RESET}                Certificate identity, SANs, key and validity
@@ -59,18 +59,17 @@ ${DSU_BOLD}${DSU_MAGENTA}SSL / TLS${DSU_RESET}  ${DSU_GRAY}live endpoints + cert
   ${DSU_GREEN}ssl performance, perf${DSU_RESET}      TLS handshake benchmark
 
 ${DSU_BOLD}${DSU_RED}Defensive security audit${DSU_RESET}
-  ${DSU_GREEN}check audit <target>${DSU_RESET}        Low-impact DNS/TLS/HTTP exposure review
+  ${DSU_GREEN}check <target> --audit${DSU_RESET}      Low-impact DNS/TLS/HTTP exposure review
   ${DSU_YELLOW}--deep --authorized${DSU_RESET}        Add authorized DNS/network probes
   ${DSU_YELLOW}--ports${DSU_RESET}                    Add top-100 TCP inventory in deep mode
   ${DSU_GREEN}--strict${DSU_RESET}                   Return non-zero for MEDIUM+ findings
-  Run ${DSU_CYAN}check audit --help${DSU_RESET} for scope, options and authorization rules.
+  Run ${DSU_CYAN}check example.com --audit --help${DSU_RESET} for scope and authorization rules.
 
-${DSU_BOLD}Convenience commands${DSU_RESET}
-  ${DSU_GREEN}dnsutil${DSU_RESET} <command> ...       Shortcut for ${DSU_GREEN}check dns${DSU_RESET}
-  ${DSU_GREEN}ssl${DSU_RESET} <command> ...           Shortcut for ${DSU_GREEN}check ssl${DSU_RESET}
-  ${DSU_GREEN}vulncheck${DSU_RESET} <target> ...      Shortcut for ${DSU_GREEN}check audit${DSU_RESET}
-  ${DSU_GREEN}sitecheck${DSU_RESET} <domain>          Compatibility frontend for site diagnostics
-  ${DSU_GRAY}dsu is retained only as a compatibility alias for the suite dispatcher.${DSU_RESET}
+${DSU_BOLD}Commands${DSU_RESET}
+  ${DSU_GREEN}check${DSU_RESET} <domain> [flags]       Domain overview and site diagnostics
+  ${DSU_GREEN}check${DSU_RESET} <domain> --dns ...   DNS diagnostics via flags
+  ${DSU_GREEN}check${DSU_RESET} <target> --audit ... Defensive security audit via flags
+  ${DSU_GREEN}ssl${DSU_RESET} <command> [flags]       SSL/TLS and certificate tools
 
 ${DSU_BOLD}Global options${DSU_RESET}
   ${DSU_GREEN}--help, -h${DSU_RESET}                 Show help
@@ -80,25 +79,25 @@ ${DSU_BOLD}Global options${DSU_RESET}
   ${DSU_GREEN}--ascii${DSU_RESET}                    Use ASCII status markers
 
 ${DSU_BOLD}Help${DSU_RESET}
-  ${DSU_CYAN}check dns --help${DSU_RESET}            DNS command reference
-  ${DSU_CYAN}check ssl --help${DSU_RESET}            SSL/TLS command reference
+  ${DSU_CYAN}check --help${DSU_RESET}                Domain and DNS flag reference
+  ${DSU_CYAN}ssl --help${DSU_RESET}                  SSL/TLS command reference
   ${DSU_CYAN}ssl cert --help${DSU_RESET}             Command-specific help
-  ${DSU_CYAN}check audit --help${DSU_RESET}          Audit scope and authorization model
+  ${DSU_CYAN}check example.com --audit --help${DSU_RESET} Audit scope and authorization model
 
 ${DSU_BOLD}Examples${DSU_RESET}
   ${DSU_CYAN}check example.com${DSU_RESET}
   ${DSU_CYAN}check example.com --no-rdns${DSU_RESET}
-  ${DSU_CYAN}dnsutil m example.com${DSU_RESET}
+  ${DSU_CYAN}check example.com --mail${DSU_RESET}
   ${DSU_CYAN}ssl c example.com${DSU_RESET}
   ${DSU_CYAN}ssl fetch 203.0.113.10 example.com${DSU_RESET}
-  ${DSU_CYAN}vulncheck example.com${DSU_RESET}
-  ${DSU_CYAN}vulncheck example.com --deep --authorized${DSU_RESET}
+  ${DSU_CYAN}check example.com --audit${DSU_RESET}
+  ${DSU_CYAN}check example.com --audit --deep --authorized${DSU_RESET}
 
 ${DSU_BOLD}Dependencies${DSU_RESET}
   Required: ${DSU_WHITE}bash 4+, curl, openssl, dig (dnsutils), python3, coreutils${DSU_RESET}
   Recommended: ${DSU_WHITE}whois${DSU_RESET}
   Optional: ${DSU_WHITE}sslscan, nmap, file${DSU_RESET}
-  Diagnose: ${DSU_CYAN}check doctor${DSU_RESET}
+  Diagnose: ${DSU_CYAN}check --doctor${DSU_RESET}
 
 ${DSU_BOLD}Exit codes${DSU_RESET}
   ${DSU_GREEN}0${DSU_RESET}    Command completed ${DSU_GRAY}(audit findings may still exist without --strict)${DSU_RESET}
@@ -146,52 +145,12 @@ DEPS
 }
 
 _dsu_dispatch_check_command() {
-  # When invoked as `check`, an ordinary first argument is the target.
-  # Known suite commands still route through the normal dispatcher, making
-  # `check dns ...`, `check ssl ...`, `check audit ...`, etc. intuitive.
   case "${1:-}" in
     "") _dsu_main_help ;;
-    help|--help|-h|version|--version|-v|doctor|diag|dns|ssl|tls|site|check|c|audit|a|vuln|vulnerability|security|sec|rdns|ptr|cert)
-      _dsu_dispatch_normal "$@"
-      ;;
-    *)
-      dsu_site_check "$@"
-      ;;
-  esac
-}
-
-_dsu_dispatch_normal() {
-  local cmd="${1:-help}"; shift || true
-  case "${cmd,,}" in
-    help|--help|-h) 
-      if (( $# )); then
-        case "${1,,}" in
-          dns) [[ -n "${2:-}" ]] && _dsu_dns_leaf_help "$2" || _dsu_dns_usage ;;
-          ssl) [[ -n "${2:-}" ]] && _dsu_ssl_leaf_help "$2" || _dsu_ssl_usage ;;
-          site) [[ -n "${2:-}" ]] && _dsu_site_leaf_help "$2" || _dsu_site_usage ;;
-          audit|security|vuln) _dsu_audit_usage ;;
-          *) _dsu_main_help ;;
-        esac
-      else _dsu_main_help; fi
-      ;;
+    help|--help|-h) _dsu_main_help ;;
     version|--version|-v) printf '%s %s\n' "$DSU_NAME" "$DSU_VERSION" ;;
-    doctor|diag) dsu_doctor ;;
-    dns) dsu_dns_dispatch "$@" ;;
-    ssl|tls) dsu_ssl_dispatch "$@" ;;
-    site) dsu_site_dispatch "$@" ;;
-    check|c) dsu_site_check "$@" ;;
-    audit|a|vuln|vulnerability|security|sec) 
-      if [[ "${1:-}" == "audit" ]]; then shift; fi
-      if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || -z "${1:-}" ]]; then
-        _dsu_audit_usage
-        return 0
-      else
-        dsu_security_audit "$@"
-      fi
-      ;;
-    rdns|ptr) dsu_dns_reverse "$@" ;;
-    cert) dsu_ssl_cert "$@" ;;
-    *) dsu_bad "Unknown command: $cmd"; printf '\n'; _dsu_main_help; return 2 ;;
+    doctor|--doctor|diag|--diag) dsu_doctor ;;
+    *) dsu_site_check "$@" ;;
   esac
 }
 
@@ -212,14 +171,7 @@ main() {
   case "$invoked" in
     check) _dsu_dispatch_check_command "$@" ;;
     ssl) dsu_ssl_dispatch "$@" ;;
-    dnsutil) dsu_dns_dispatch "$@" ;;
-    sitecheck)
-      case "${1:-}" in check|c|headers|h|redirects|r|status|s|--help|-h|help) dsu_site_dispatch "$@" ;; *) dsu_site_check "$@" ;; esac
-      ;;
-    vulncheck) 
-      if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || -z "${1:-}" ]]; then _dsu_audit_usage; else dsu_security_audit "$@"; fi
-      ;;
-    *) _dsu_dispatch_normal "$@" ;;
+    *) _dsu_main_help ;;
   esac
 }
 

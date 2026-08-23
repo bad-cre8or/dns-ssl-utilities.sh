@@ -179,6 +179,32 @@ dsu_extract_port() {
   if [[ "$input" =~ :([0-9]+)$ && "$input" != *:*:* ]]; then printf '%s' "${BASH_REMATCH[1]}"; else printf '%s' "$default"; fi
 }
 
+dsu_valid_port() {
+  local port="${1:-}"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  (( 10#$port >= 1 && 10#$port <= 65535 ))
+}
+
+dsu_target_parts() {
+  local input="${1:-}" explicit_port="${2:-}" default_port="${3:-443}" host port
+  host=$(dsu_normalize_host "$input")
+  if [[ -n "$explicit_port" ]]; then port="$explicit_port"; else port=$(dsu_extract_port "$input" "$default_port"); fi
+  dsu_valid_host "$host" || return 1
+  dsu_valid_port "$port" || return 2
+  printf '%s\t%s\n' "$host" "$port"
+}
+
+dsu_socket_target() {
+  local host="$1" port="$2"
+  if [[ "$host" == *:* ]]; then printf '[%s]:%s' "$host" "$port"; else printf '%s:%s' "$host" "$port"; fi
+}
+
+dsu_url_authority() {
+  local host="$1" port="${2:-}" default_port="${3:-}"
+  if [[ "$host" == *:* ]]; then host="[$host]"; fi
+  if [[ -n "$port" && "$port" != "$default_port" ]]; then printf '%s:%s' "$host" "$port"; else printf '%s' "$host"; fi
+}
+
 dsu_tmpdir() {
   mktemp -d "${TMPDIR:-/tmp}/dns-ssl-utilities.XXXXXX"
 }
@@ -239,15 +265,17 @@ dsu_http_code_from_headers() {
 }
 
 dsu_fetch_leaf_cert() {
-  local host="$1" port="${2:-443}" out="$3"
-  timeout "$DSU_MAX_TIME" openssl s_client -servername "$host" -connect "$host:$port" </dev/null 2>/dev/null \
+  local host="$1" port="${2:-443}" out="$3" target
+  target=$(dsu_socket_target "$host" "$port")
+  timeout "$DSU_MAX_TIME" openssl s_client -servername "$host" -connect "$target" </dev/null 2>/dev/null \
     | openssl x509 -outform PEM >"$out" 2>/dev/null
   [[ -s "$out" ]]
 }
 
 dsu_openssl_connection() {
-  local host="$1" port="${2:-443}"
-  timeout "$DSU_MAX_TIME" openssl s_client -servername "$host" -connect "$host:$port" -showcerts </dev/null 2>&1
+  local host="$1" port="${2:-443}" target
+  target=$(dsu_socket_target "$host" "$port")
+  timeout "$DSU_MAX_TIME" openssl s_client -servername "$host" -connect "$target" -showcerts </dev/null 2>&1
 }
 
 dsu_days_until() {
