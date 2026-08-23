@@ -193,7 +193,7 @@ dsu_site_check() {
         return
         ;;
       --fresh) ;; # accepted for backward compatibility; registrar data is no longer cached
-      -h|--help) _dsu_site_leaf_help check; return 0 ;;
+      -h|--help) _dsu_main_help; return 0 ;;
       *) dsu_bad "Unknown check option: $1"; return 2 ;;
     esac
     shift

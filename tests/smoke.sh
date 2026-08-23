@@ -37,9 +37,14 @@ set -e
 pass 'target and port validation'
 
 help_out=$($CHECK --no-color --ascii --help)
-grep -q 'ssl cert, c' <<<"$help_out" || fail 'top-level help lacks ssl aliases'
-grep -q 'check <target> --audit' <<<"$help_out" || fail 'top-level help lacks audit flag'
-grep -q 'check.*<domain>' <<<"$help_out" || fail 'top-level help lacks primary check usage'
+target_help_out=$($CHECK example.test --no-color --ascii --help)
+[[ "$target_help_out" == "$help_out" ]] || fail 'target --help differs from check --help'
+grep -q 'ssl <command> \[flags\]' <<<"$help_out" || fail 'top-level help lacks ssl command usage'
+grep -q '^  --audit' <<<"$help_out" || fail 'top-level help lacks audit flag'
+grep -q 'check <domain-or-ip> \[flags\]' <<<"$help_out" || fail 'top-level help lacks primary check usage'
+for required_flag in --dns --reverse --mail --dnssec --trace --whois --hosting --audit; do
+  grep -q -- "$required_flag" <<<"$help_out" || fail "top-level help lacks $required_flag"
+done
 $SSL --no-color cert --help | grep -q 'Usage: ssl cert' || fail 'leaf help'
 ssl_help=$($SSL --no-color --ascii --help)
 grep -q 'ssl.*<command>' <<<"$ssl_help" || fail 'ssl help lacks command usage'
@@ -210,7 +215,7 @@ for obsolete in dsu dnsutil vulncheck sitecheck dns-ssl-utilities; do
   [[ ! -e "$TEST_HOME/bin/$obsolete" && ! -L "$TEST_HOME/bin/$obsolete" ]] || fail "obsolete command link retained: $obsolete"
 done
 alias_out=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" ssl --no-color cert --help); grep -q 'Usage: ssl cert' <<<"$alias_out" || fail 'installed ssl alias'
-check_help=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --no-color --ascii --help); grep -q 'check.*<domain>' <<<"$check_help" || fail 'installed check help'
+check_help=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --no-color --ascii --help); grep -q 'check <domain-or-ip> \[flags\]' <<<"$check_help" || fail 'installed check help'
 check_version=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --version); grep -q '2.2.2' <<<"$check_version" || fail 'installed check version'
 check_dns=$(HOME="$TEST_HOME" PATH="$TMP/mockbin:$TEST_HOME/bin:$PATH" check example.test --no-color --ascii --dns); grep -q '192.0.2.10' <<<"$check_dns" || fail 'check --dns routing'
 pass 'installer and public entry points'
