@@ -67,6 +67,9 @@ mail_summary=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; dsu_di
 grep -q 'SPF contains: v=spf1 include:_spf.example.test -all' <<<"$mail_summary" || fail 'fast check SPF contents'
 grep -q 'DMARC policy: quarantine' <<<"$mail_summary" || fail 'fast check DMARC policy only'
 ! grep -q 'rua=' <<<"$mail_summary" || fail 'fast check exposes full DMARC record'
+lookup_error_summary=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; dsu_disable_color; DSU_ASCII=1; _dsu_site_print_mail_policy "" "" ERROR ERROR' _ "$ROOT")
+grep -q 'SPF lookup failed; record presence is unknown' <<<"$lookup_error_summary" || fail 'SPF lookup failure mislabeled as missing'
+grep -q 'DMARC lookup failed; record presence is unknown' <<<"$lookup_error_summary" || fail 'DMARC lookup failure mislabeled as missing'
 cert_cn=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; _dsu_site_cert_cn "$2"' _ "$ROOT" smoke.crt)
 [[ "$cert_cn" == smoke.example ]] || fail 'fast check certificate CN parsing'
 cert_issuer=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; _dsu_site_cert_issuer "$2"' _ "$ROOT" smoke.crt)
@@ -78,6 +81,18 @@ openssl x509 -in extracted/certificate.pem -noout >/dev/null
 openssl pkey -in extracted/private-key.pem -noout >/dev/null
 [[ "$(stat -c '%a' extracted)" == 700 && "$(stat -c '%a' extracted/private-key.pem)" == 600 ]] || fail 'extracted private-key permissions'
 pass 'CSR/match/PFX workflows'
+
+mkdir -p "$TMP/fallbackbin"
+cat >"$TMP/fallbackbin/dig" <<'MOCK'
+#!/usr/bin/env bash
+[[ " $* " == *" @1.1.1.1 "* ]] || exit 9
+[[ " $* " == *" _dmarc.example.test "* ]] && echo '"v=DMARC1; p=quarantine"' || echo '"v=spf1 include:_spf.example.test ~all"'
+MOCK
+chmod +x "$TMP/fallbackbin/dig"
+fallback_result=$(PATH="$TMP/fallbackbin:$PATH" bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; status="$2/status"; _dsu_site_policy_query TXT example.test "$status"; printf "STATE=%s\n" "$(cat "$status")"' _ "$ROOT" "$TMP")
+grep -q 'v=spf1 include:_spf.example.test ~all' <<<"$fallback_result" || fail 'policy DNS fallback did not return SPF'
+grep -q 'STATE=OK' <<<"$fallback_result" || fail 'policy DNS fallback reported failure'
+pass 'policy DNS resolver fallback'
 
 mkdir -p "$TMP/tls"
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$TMP/tls/key.pem" -out "$TMP/tls/cert.pem" -days 3 \

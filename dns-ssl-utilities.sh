@@ -73,6 +73,7 @@ ${DSU_BOLD}Dependencies${DSU_RESET}
   Required: ${DSU_WHITE}bash 4+, curl, openssl, dig (dnsutils), python3, coreutils${DSU_RESET}
   Recommended: ${DSU_WHITE}whois${DSU_RESET}
   Optional: ${DSU_WHITE}sslscan, nmap, file${DSU_RESET}
+  Policy DNS fallback: ${DSU_WHITE}1.1.1.1${DSU_RESET} ${DSU_GRAY}(used when the system resolver fails)${DSU_RESET}
   Diagnose: ${DSU_CYAN}check --doctor${DSU_RESET}
   SSL help: ${DSU_CYAN}ssl --help${DSU_RESET}
 
@@ -92,6 +93,7 @@ dsu_doctor() {
   dsu_keyval "Home" "$DSU_HOME"
   dsu_section "Network tuning"
   dsu_keyval "Fast check DNS" "${DSU_CHECK_DNS_TIMEOUT}s"
+  dsu_keyval "Policy DNS fallback" "${DSU_FALLBACK_RESOLVER:-disabled}"
   dsu_keyval "Fast check HTTP/TLS" "${DSU_CHECK_MAX_TIME}s max"
   dsu_keyval "Fast check WHOIS" "${DSU_CHECK_WHOIS_TIMEOUT}s"
   dsu_keyval "DNS timeout" "${DSU_DNS_TIMEOUT}s × ${DSU_DNS_TRIES} try/tries"

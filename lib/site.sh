@@ -133,16 +133,38 @@ _dsu_site_dmarc_policy() {
 }
 
 _dsu_site_print_mail_policy() {
-  local spf="$1" dmarc="$2" dmarc_policy
+  local spf="$1" dmarc="$2" spf_state="${3:-OK}" dmarc_state="${4:-OK}" dmarc_policy
   dmarc_policy=$(_dsu_site_dmarc_policy "$dmarc")
-  [[ -n "$spf" ]] && dsu_ok "SPF contains: $spf" || dsu_warn "SPF missing"
+  if [[ -n "$spf" ]]; then dsu_ok "SPF contains: $spf"
+  elif [[ "$spf_state" == ERROR ]]; then dsu_bad "SPF lookup failed; record presence is unknown"
+  else dsu_warn "SPF missing"
+  fi
   if [[ -n "$dmarc_policy" ]]; then
     dsu_ok "DMARC policy: $dmarc_policy"
   elif [[ -n "$dmarc" ]]; then
     dsu_warn "DMARC record found, but no p= policy is set"
+  elif [[ "$dmarc_state" == ERROR ]]; then
+    dsu_bad "DMARC lookup failed; record presence is unknown"
   else
     dsu_warn "DMARC missing"
   fi
+}
+
+_dsu_site_policy_query() {
+  local type="$1" name="$2" status_file="$3" output='' rc=0
+  output=$(dig +time="$DSU_CHECK_POLICY_DNS_TIMEOUT" +tries=2 +short "$type" "$name" 2>/dev/null) || rc=$?
+  if (( rc != 0 )) || [[ -z "$output" ]]; then
+    if [[ -n "$DSU_FALLBACK_RESOLVER" ]]; then
+      rc=0
+      output=$(dig @"$DSU_FALLBACK_RESOLVER" +time="$DSU_CHECK_POLICY_DNS_TIMEOUT" +tries=2 +short "$type" "$name" 2>/dev/null) || rc=$?
+    fi
+  fi
+  if (( rc != 0 )); then
+    printf 'ERROR\n' >"$status_file"
+    return 1
+  fi
+  printf 'OK\n' >"$status_file"
+  printf '%s\n' "$output"
 }
 
 _dsu_site_cert_cn() {
@@ -230,9 +252,9 @@ dsu_site_check() {
   (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines CNAME "www.$host") >"$tmp/www_cname" & pid_www_cname=$!
   (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines NS "$host") >"$tmp/ns" & pid_ns=$!
   (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines MX "$host") >"$tmp/mx" & pid_mx=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines TXT "$host") >"$tmp/txt" & pid_txt=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines TXT "_dmarc.$host") >"$tmp/dmarc" & pid_dmarc=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines CAA "$host") >"$tmp/caa" & pid_caa=$!
+  (_dsu_site_policy_query TXT "$host" "$tmp/txt.status" || true) >"$tmp/txt" & pid_txt=$!
+  (_dsu_site_policy_query TXT "_dmarc.$host" "$tmp/dmarc.status" || true) >"$tmp/dmarc" & pid_dmarc=$!
+  (_dsu_site_policy_query CAA "$host" "$tmp/caa.status" || true) >"$tmp/caa" & pid_caa=$!
   (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines DNSKEY "$host") >"$tmp/dnskey" & pid_dnskey=$!
   (dig +time="$DSU_CHECK_DNS_TIMEOUT" +tries=1 A "$host" +dnssec 2>/dev/null || true) >"$tmp/dnssec" & pid_dnssec=$!
 
@@ -277,7 +299,7 @@ dsu_site_check() {
     wait "$pid" 2>/dev/null || true
   done
 
-  local cname provider_cnames ns mx spf dmarc caa
+  local cname provider_cnames ns mx spf dmarc caa spf_state dmarc_state caa_state
   cname=$(cat "$tmp/cname" 2>/dev/null || true)
   provider_cnames=$(cat "$tmp/cname" "$tmp/www_cname" 2>/dev/null | awk 'NF' | sort -u)
   ns=$(cat "$tmp/ns" 2>/dev/null || true)
@@ -285,6 +307,9 @@ dsu_site_check() {
   spf=$(tr -d '"' <"$tmp/txt" | grep -i '^v=spf1' | head -1)
   dmarc=$(tr -d '"' <"$tmp/dmarc" | grep -i '^v=DMARC1' | head -1)
   caa=$(cat "$tmp/caa" 2>/dev/null || true)
+  spf_state=$(cat "$tmp/txt.status" 2>/dev/null || printf 'ERROR')
+  dmarc_state=$(cat "$tmp/dmarc.status" 2>/dev/null || printf 'ERROR')
+  caa_state=$(cat "$tmp/caa.status" 2>/dev/null || printf 'ERROR')
 
   dsu_section "DNS"
   if [[ -n "$a" ]]; then
@@ -317,9 +342,11 @@ dsu_site_check() {
   else
     dsu_info "No MX records"
   fi
-  _dsu_site_print_mail_policy "$spf" "$dmarc"
+  _dsu_site_print_mail_policy "$spf" "$dmarc" "$spf_state" "$dmarc_state"
   if [[ -n "$caa" ]]; then
     _dsu_site_print_records ok "CAA" "$caa"
+  elif [[ "$caa_state" == ERROR ]]; then
+    dsu_bad "CAA lookup failed; record presence is unknown"
   else
     dsu_warn "CAA missing"
   fi
