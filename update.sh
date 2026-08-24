@@ -6,3 +6,4 @@ if [[ ! -d "$ROOT/.git" ]]; then
   exit 1
 fi
 git -C "$ROOT" pull --ff-only
+"$ROOT/setup.sh"

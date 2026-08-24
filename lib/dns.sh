@@ -2,85 +2,6 @@
 
 # shellcheck source=lib/core.sh
 
-_dsu_dns_usage() {
-  cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}DNS flags${DSU_RESET}
-
-${DSU_BOLD}Usage${DSU_RESET}
-  ${DSU_GREEN}check${DSU_RESET} <domain-or-ip> <dns-flag> [value]
-
-${DSU_GREEN}--dns [TYPE]${DSU_RESET}      Show useful DNS records or a specific record type
-${DSU_GREEN}--reverse${DSU_RESET}         Reverse DNS / PTR for a host or IP
-${DSU_GREEN}--mail [selector]${DSU_RESET} SPF, DMARC, DKIM, MTA-STS and TLS-RPT checks
-${DSU_GREEN}--dnssec${DSU_RESET}          DNSSEC records and resolver validation
-${DSU_GREEN}--trace${DSU_RESET}           Delegation trace from the DNS root
-${DSU_GREEN}--whois${DSU_RESET}           Registrar, dates and domain-status summary
-${DSU_GREEN}--hosting${DSU_RESET}         Best-effort hosting/provider identification
-
-${DSU_BOLD}Examples${DSU_RESET}
-  ${DSU_CYAN}check example.com --dns${DSU_RESET}
-  ${DSU_CYAN}check example.com --dns MX${DSU_RESET}
-  ${DSU_CYAN}check 203.0.113.20 --reverse${DSU_RESET}
-  ${DSU_CYAN}check example.com --mail selector1${DSU_RESET}
-  ${DSU_CYAN}check example.com --dnssec${DSU_RESET}
-  ${DSU_CYAN}check example.com --whois${DSU_RESET}
-
-Run ${DSU_CYAN}check --help${DSU_RESET} for the complete flag reference.
-EOF_HELP
-}
-
-_dsu_dns_leaf_help() {
-  case "${1,,}" in
-    lookup|look|resolve|records|l) _dsu_dns_lookup_help ;;
-    reverse|ptr|rdns|r) cat <<EOF
-${DSU_BOLD}DNS reverse / PTR${DSU_RESET}
-Usage: check <domain-or-ip> --reverse
-
-A domain expands to its A and AAAA addresses before PTR lookup.
-Real PTR answers, no-PTR responses and resolver/transport failures are reported separately.
-EOF
-      ;;
-    mail|email|m) cat <<EOF
-${DSU_BOLD}DNS mail policy${DSU_RESET}
-Usage: check <domain> --mail [dkim-selector]
-
-Checks SPF, DMARC, CAA, MTA-STS, TLS-RPT and either a supplied DKIM selector
-or a curated set of common selectors.
-EOF
-      ;;
-    dnssec|ds) cat <<EOF
-${DSU_BOLD}DNSSEC${DSU_RESET}
-Usage: check <domain> --dnssec
-
-Shows DNSKEY/DS posture and whether the configured resolver returned validation.
-EOF
-      ;;
-    trace|t) cat <<EOF
-${DSU_BOLD}DNS delegation trace${DSU_RESET}
-Usage: check <domain> --trace
-
-Follows delegation from the DNS root to help diagnose parent/child nameserver issues.
-EOF
-      ;;
-    whois|w) cat <<EOF
-${DSU_BOLD}WHOIS / registrar${DSU_RESET}
-Usage: check <domain> --whois
-
-Shows registrar, creation/expiry dates and domain status when the registry publishes them.
-Registrar parsing preserves the suite's conservative direct/multiline/handle WHOIS sequence.
-EOF
-      ;;
-    hosting|host|provider|h) cat <<EOF
-${DSU_BOLD}Hosting/provider identification${DSU_RESET}
-Usage: check <domain> --hosting
-
-Uses available DNS, address and hostname signals to make a best-effort provider guess.
-EOF
-      ;;
-    *) _dsu_dns_usage ;;
-  esac
-}
-
 _dsu_dns_lookup_help() {
   cat <<EOF_HELP
 ${DSU_BOLD}DNS lookup${DSU_RESET}
@@ -429,20 +350,4 @@ dsu_dns_hosting() {
   dsu_need python3 python3 || return
   dsu_section "Hosting/provider · $(dsu_normalize_host "$input")"
   python3 "$DSU_HOME/helpers/hosting_provider.py" "$input"
-}
-
-dsu_dns_dispatch() {
-  local cmd="${1:-help}"; shift || true
-  if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _dsu_dns_leaf_help "$cmd"; return 0; fi
-  case "${cmd,,}" in
-    help|--help|-h) _dsu_dns_usage ;;
-    lookup|look|resolve|records|l) dsu_dns_lookup "$@" ;;
-    reverse|ptr|rdns|r) dsu_dns_reverse "$@" ;;
-    mail|email|m) dsu_dns_mail "$@" ;;
-    dnssec|ds) dsu_dns_dnssec "$@" ;;
-    trace|t) dsu_dns_trace "$@" ;;
-    whois|w) dsu_dns_whois "$@" ;;
-    hosting|host|provider|h) dsu_dns_hosting "$@" ;;
-    *) dsu_bad "Unknown dns command: $cmd"; printf '\n'; _dsu_dns_usage; return 2 ;;
-  esac
 }

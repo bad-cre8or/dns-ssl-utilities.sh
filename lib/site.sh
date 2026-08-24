@@ -1,43 +1,5 @@
 #!/usr/bin/env bash
 
-_dsu_site_usage() {
-  cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}Domain check${DSU_RESET}
-
-Usage:
-  ${DSU_GREEN}check <domain> [flags]${DSU_RESET}
-
-Flags:
-  --no-rdns  --dns [TYPE]  --reverse  --mail [selector]
-  --dnssec   --trace       --whois    --hosting
-  --audit [--deep --authorized --ports --strict]
-
-${DSU_BOLD}Examples${DSU_RESET}
-  ${DSU_CYAN}check example.com${DSU_RESET}
-  ${DSU_CYAN}check example.com --no-rdns${DSU_RESET}
-  ${DSU_CYAN}check example.com --dns MX${DSU_RESET}
-  ${DSU_CYAN}check example.com --audit${DSU_RESET}
-EOF_HELP
-}
-
-_dsu_site_leaf_help() {
-  case "${1,,}" in
-    check|c|full) cat <<EOF
-${DSU_BOLD}Fast domain overview${DSU_RESET}
-Usage: check <domain> [--no-rdns]
-
-Reports registrar, useful DNS records, DNSSEC, SPF/DMARC/CAA, hosting/provider
-signals, TLS certificate health, HTTP/HTTPS posture and PTR results.
-It does not run the vulnerability audit or heavyweight TLS scans.
-
-Options:
-  --no-rdns  Skip PTR lookups for the lowest possible latency
-EOF
-      ;;
-    *) _dsu_site_usage ;;
-  esac
-}
-
 _dsu_site_print_records() {
   local level="$1" label="$2" data="$3" line
   while IFS= read -r line; do
@@ -150,6 +112,49 @@ _dsu_site_extract_leaf_cert() {
     /^-----END CERTIFICATE-----$/ && capture { exit }
   ' "$meta" >"$out" 2>/dev/null || true
   [[ -s "$out" ]]
+}
+
+_dsu_site_dmarc_policy() {
+  local record="${1:-}"
+  printf '%s\n' "$record" | awk -F';' '
+    {
+      for (i=1; i<=NF; i++) {
+        field=$i
+        sub(/^[[:space:]]*/, "", field)
+        sub(/[[:space:]]*$/, "", field)
+        if (tolower(field) ~ /^p[[:space:]]*=/) {
+          sub(/^[^=]*=[[:space:]]*/, "", field)
+          print tolower(field)
+          exit
+        }
+      }
+    }
+  '
+}
+
+_dsu_site_print_mail_policy() {
+  local spf="$1" dmarc="$2" dmarc_policy
+  dmarc_policy=$(_dsu_site_dmarc_policy "$dmarc")
+  [[ -n "$spf" ]] && dsu_ok "SPF contains: $spf" || dsu_warn "SPF missing"
+  if [[ -n "$dmarc_policy" ]]; then
+    dsu_ok "DMARC policy: $dmarc_policy"
+  elif [[ -n "$dmarc" ]]; then
+    dsu_warn "DMARC record found, but no p= policy is set"
+  else
+    dsu_warn "DMARC missing"
+  fi
+}
+
+_dsu_site_cert_cn() {
+  local cert="$1"
+  openssl x509 -in "$cert" -noout -subject -nameopt multiline 2>/dev/null \
+    | sed -nE 's/^[[:space:]]*(commonName|CN)[[:space:]]*=[[:space:]]*//p' \
+    | head -1
+}
+
+_dsu_site_cert_issuer() {
+  local cert="$1"
+  openssl x509 -in "$cert" -noout -issuer -nameopt RFC2253 2>/dev/null | sed 's/^issuer=//'
 }
 
 _dsu_site_fetch_leaf_fallback() {
@@ -312,8 +317,7 @@ dsu_site_check() {
   else
     dsu_info "No MX records"
   fi
-  [[ -n "$spf" ]] && dsu_ok "SPF: $spf" || dsu_warn "SPF missing"
-  [[ -n "$dmarc" ]] && dsu_ok "DMARC: $dmarc" || dsu_warn "DMARC missing"
+  _dsu_site_print_mail_policy "$spf" "$dmarc"
   if [[ -n "$caa" ]]; then
     _dsu_site_print_records ok "CAA" "$caa"
   else
@@ -339,7 +343,7 @@ dsu_site_check() {
   fi
 
   wait "$pid_https" 2>/dev/null || true
-  local cert_end days
+  local cert_end cert_issuer cert_cn days
   _dsu_site_extract_leaf_cert "$tmp/https.meta" "$tmp/cert.pem" || true
   if [[ ! -s "$tmp/cert.pem" ]]; then
     _dsu_site_fetch_leaf_fallback "$host" "$tmp/cert.pem" || true
@@ -348,7 +352,11 @@ dsu_site_check() {
   dsu_section "TLS"
   if [[ -s "$tmp/cert.pem" ]]; then
     cert_end=$(openssl x509 -in "$tmp/cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2-)
+    cert_issuer=$(_dsu_site_cert_issuer "$tmp/cert.pem")
+    cert_cn=$(_dsu_site_cert_cn "$tmp/cert.pem")
     days=$(dsu_days_until "$cert_end" 2>/dev/null || printf '?')
+    dsu_keyval "Issuer" "${cert_issuer:-unknown}"
+    dsu_keyval "CN" "${cert_cn:-not present}"
     if openssl x509 -in "$tmp/cert.pem" -noout -checkhost "$host" >/dev/null 2>&1; then
       dsu_ok "Certificate hostname match"
     else
@@ -423,59 +431,4 @@ dsu_site_check() {
   fi
 
   dsu_cleanup_dir "$tmp"
-}
-
-dsu_site_headers() {
-  dsu_ssl_headers "$@"
-}
-
-dsu_site_redirects() {
-  local input="${1:-}" url
-  [[ -n "$input" ]] || { dsu_bad "A URL or domain is required"; return 2; }
-  dsu_need curl curl || return
-  url="$input"; [[ "$url" == http://* || "$url" == https://* ]] || url="http://$url"
-  dsu_section "Redirect chain · $url"
-  curl -ksS -o /dev/null -L --max-redirs 12 --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time 25 \
-    -A "$DSU_USER_AGENT" -w '  %{http_code}  %{url_effective}\n  redirects: %{num_redirects}\n' "$url" -D - 2>/dev/null \
-    | awk 'BEGIN{IGNORECASE=1} /^HTTP\// || /^location:/ || /^  [0-9][0-9][0-9]/ || /^  redirects:/'
-}
-
-dsu_site_status() {
-  local input="${1:-}" host authority tmp end days pid_http pid_https pid_tls http https
-  [[ -n "$input" ]] || { dsu_bad "A domain is required"; return 2; }
-  host=$(dsu_normalize_host "$input")
-  dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; return 2; }
-  authority=$(dsu_url_authority "$host" "" "")
-  tmp=$(dsu_tmpdir) || return 1
-
-  (dsu_http_status "http://$authority/" || true) >"$tmp/http" & pid_http=$!
-  (dsu_http_status "https://$authority/" || true) >"$tmp/https" & pid_https=$!
-  (dsu_fetch_leaf_cert "$host" 443 "$tmp/cert.pem" || true) >/dev/null 2>&1 & pid_tls=$!
-  wait "$pid_http" 2>/dev/null || true
-  wait "$pid_https" 2>/dev/null || true
-  wait "$pid_tls" 2>/dev/null || true
-
-  http=$(cat "$tmp/http" 2>/dev/null || printf '000')
-  https=$(cat "$tmp/https" 2>/dev/null || printf '000')
-  if [[ -s "$tmp/cert.pem" ]]; then
-    end=$(openssl x509 -in "$tmp/cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2-)
-    days=$(dsu_days_until "$end" 2>/dev/null || printf '?')
-  else
-    days='no-cert'
-  fi
-  dsu_cleanup_dir "$tmp"
-  printf '%s%-35s%s HTTP=%s  HTTPS=%s  TLS=%s\n' "$DSU_CYAN" "$host" "$DSU_RESET" "$http" "$https" "$days"
-}
-
-dsu_site_dispatch() {
-  local cmd="${1:-help}"; shift || true
-  if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _dsu_site_leaf_help "$cmd"; return 0; fi
-  case "${cmd,,}" in
-    help|--help|-h) _dsu_site_usage ;;
-    check|c|full) dsu_site_check "$@" ;;
-    headers|header|h) dsu_site_headers "$@" ;;
-    redirects|redirect|r) dsu_site_redirects "$@" ;;
-    status|s) dsu_site_status "$@" ;;
-    *) dsu_bad "Unknown site command: $cmd"; printf '\n'; _dsu_site_usage; return 2 ;;
-  esac
 }

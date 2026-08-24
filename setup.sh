@@ -127,9 +127,14 @@ done
 # Remove obsolete aliases only when they still point to this installed suite.
 for name in dnsutil vulncheck sitecheck dsu dns-ssl-utilities; do
   dest="$BIN_DIR/$name"
-  if [[ -L "$dest" && "$(canonical_path "$dest")" == "$(canonical_path "$TARGET_ROOT/dns-ssl-utilities.sh")" ]]; then
-    rm -f -- "$dest"
-    printf 'remove obsolete command link %s\n' "$dest"
+  if [[ -L "$dest" ]]; then
+    resolved=$(canonical_path "$dest")
+    if [[ "$resolved" == "$(canonical_path "$TARGET_ROOT/dns-ssl-utilities.sh")" ||
+          "$resolved" == "$(canonical_path "$SOURCE_ROOT/dns-ssl-utilities.sh")" ||
+          "$resolved" == "$(canonical_path "$INSTALL_DIR/dns-ssl-utilities.sh")" ]]; then
+      rm -f -- "$dest"
+      printf 'remove obsolete command link %s\n' "$dest"
+    fi
   fi
 done
 

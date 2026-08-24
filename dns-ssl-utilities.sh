@@ -36,6 +36,12 @@ ${DSU_BOLD}Domain and DNS flags${DSU_RESET}
 
   Use one utility flag per invocation. Without one, ${DSU_GREEN}check${DSU_RESET} prints the fast overview.
 
+${DSU_BOLD}Fast overview output${DSU_RESET}
+  ${DSU_GREEN}SPF${DSU_RESET}                        Full SPF policy contents
+  ${DSU_GREEN}DMARC${DSU_RESET}                      Effective DMARC p= policy only
+  ${DSU_GREEN}TLS issuer${DSU_RESET}                 Certificate issuer distinguished name
+  ${DSU_GREEN}TLS CN${DSU_RESET}                     Certificate subject common name
+
 ${DSU_BOLD}Security audit${DSU_RESET}
   ${DSU_GREEN}--audit${DSU_RESET}                    Run the low-impact DNS/TLS/HTTP audit
   ${DSU_GREEN}--strict${DSU_RESET}                   Return non-zero for MEDIUM+ audit findings

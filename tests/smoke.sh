@@ -63,6 +63,14 @@ overwrite_rc=$?
 set -e
 [[ $overwrite_rc -eq 2 && "$overwrite_out" == *'Refusing to overwrite'* ]] || fail 'key/CSR overwrite protection'
 openssl req -in smoke.csr -x509 -key smoke.key -days 2 -out smoke.crt >/dev/null 2>&1
+mail_summary=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; dsu_disable_color; DSU_ASCII=1; _dsu_site_print_mail_policy "v=spf1 include:_spf.example.test -all" "v=DMARC1; rua=mailto:dmarc@example.test; p=Quarantine; pct=100"' _ "$ROOT")
+grep -q 'SPF contains: v=spf1 include:_spf.example.test -all' <<<"$mail_summary" || fail 'fast check SPF contents'
+grep -q 'DMARC policy: quarantine' <<<"$mail_summary" || fail 'fast check DMARC policy only'
+! grep -q 'rua=' <<<"$mail_summary" || fail 'fast check exposes full DMARC record'
+cert_cn=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; _dsu_site_cert_cn "$2"' _ "$ROOT" smoke.crt)
+[[ "$cert_cn" == smoke.example ]] || fail 'fast check certificate CN parsing'
+cert_issuer=$(bash -c 'source "$1/lib/core.sh"; source "$1/lib/site.sh"; _dsu_site_cert_issuer "$2"' _ "$ROOT" smoke.crt)
+[[ "$cert_issuer" == *'CN=smoke.example'* ]] || fail 'fast check certificate issuer parsing'
 $SSL --no-color --ascii match smoke.crt smoke.csr smoke.key | grep -q 'All supplied files use the same public key' || fail 'public-key matching'
 DSU_PFX_PASSWORD=testpass $SSL --no-color --ascii pack smoke.crt smoke.key '' smoke.pfx >/dev/null
 printf 'testpass\n' | $SSL --no-color --ascii extract smoke.pfx extracted >/dev/null 2>&1
