@@ -257,3 +257,4 @@ pass 'installer tolerates optional docs missing'
 printf '\nAll smoke tests passed.\n'
 
 python3 "$ROOT/tests/report.py"
+python3 "$ROOT/tests/certificate.py"

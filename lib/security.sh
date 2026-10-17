@@ -140,7 +140,7 @@ _dsu_audit_tls() {
 
   verify=$(printf '%s\n' "$conn" | sed -n 's/^Verify return code: //p' | tail -1)
   if [[ "$verify" == 0* ]]; then dsu_finding INFO "Certificate chain verification returned: $verify"; else dsu_finding HIGH "Certificate chain verification returned: ${verify:-unknown}"; fi
-  if openssl x509 -in "$tmp/leaf.pem" -noout -checkhost "$host" >/dev/null 2>&1; then dsu_finding INFO "Certificate identity matches $host"; else dsu_finding CRITICAL "Certificate identity does not match $host"; fi
+  if dsu_cert_matches_host "$tmp/leaf.pem" "$host"; then dsu_finding INFO "Certificate identity matches $host"; else dsu_finding CRITICAL "Certificate identity does not match $host"; fi
 
   end=$(openssl x509 -in "$tmp/leaf.pem" -noout -enddate | cut -d= -f2-)
   if days=$(dsu_days_until "$end" 2>/dev/null); then
