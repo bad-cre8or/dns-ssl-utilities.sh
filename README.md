@@ -10,7 +10,7 @@ check example.com
 
 That’s the main idea.
 
-No banner. No ceremony. No digging through five different tools just to answer a customer’s domain question. ⚡
+A compact domain report. No digging through five different tools just to answer a customer’s domain question. ⚡
 
 ---
 
@@ -804,21 +804,34 @@ This keeps audits faster without unnecessarily hammering the target.
 
 ---
 
-# 🎨 Colors
+# 🎨 Report layout and colors
 
 Colored output is enabled automatically when appropriate.
 
-The terminal presentation uses a Tokyo Night palette, subtle section dividers,
-cyan field labels, and aligned key/value rows. True-color terminals get the
-full palette; other color terminals use a 256-color fallback. Dividers adapt
-to the terminal width, up to 88 columns, while long diagnostic values wrap
-naturally without being truncated. No additional runtime dependencies are needed.
+The default `check example.com` overview is a structured terminal report:
 
-![Tokyo Night terminal output, rendered with sample responses](docs/terminal-preview.png)
+* a domain summary with registrar and inferred hosting provider
+* DNS records grouped under A, AAAA, NS, and CNAME labels
+* mail policies alongside DNS on wide terminals
+* certificate details alongside HTTP/HTTPS results
+* a reverse-DNS table and totals for the existing observation statuses
+
+Panels sit side by side at 110 columns and above, and stack on narrower
+terminals. The report uses up to 124 columns. Long SPF policies, certificate
+details, IPv6 addresses, and URLs wrap without being truncated.
+
+The layout presents the same checks and original statuses; it adds no probes
+and changes no WHOIS/registrar parsing or timeouts. It renders once the original
+overview has completed. Utility modes such as `--whois`, `--dns`, and `--audit`
+keep their existing output.
+
+The Tokyo Night palette supports true-color and 256-color terminals. Your
+terminal controls the background and font. No additional packages are needed.
+
+![Structured command report, rendered with sample responses](docs/terminal-preview.png)
 
 *Illustrative overview using mocked DNS, WHOIS, HTTP, and TLS responses for
-`example.test`; this is not a live domain report. Your terminal controls the
-background and font.*
+`example.test`; this is not a live domain report.*
 
 Disable it with:
 
@@ -826,14 +839,22 @@ Disable it with:
 NO_COLOR=1 check example.com
 ```
 
-For plain ASCII headings and status markers:
+For the original line-by-line overview:
 
 ```bash
-check example.com --no-color --ascii
+check example.com --plain
 ```
 
-Plain output keeps the compact layout, without decorative dividers. To force
-ANSI colors when capturing output, use `--color`.
+For that layout with plain ASCII headings and status markers:
+
+```bash
+check example.com --plain --no-color --ascii
+```
+
+Redirected output automatically keeps the original line-by-line layout for
+logs and text processing. To capture the panel layout with ANSI colors, use
+`--color`. `--no-color` removes colors while retaining panels in a terminal;
+`--ascii` substitutes ASCII borders and status markers.
 
 Useful for:
 

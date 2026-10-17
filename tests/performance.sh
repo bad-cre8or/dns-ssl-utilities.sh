@@ -46,6 +46,7 @@ MOCK
 cat >"$TMP/bin/whois" <<'MOCK'
 #!/usr/bin/env bash
 sleep "${DSU_TEST_DELAY:-0.20}"
+[[ -z "${DSU_TEST_WHOIS_LOG:-}" ]] || printf '%s\n' "$*" >>"$DSU_TEST_WHOIS_LOG"
 cat <<OUT
 Domain Name: EXAMPLE.TEST
 Registrar: Example Registrar AS
@@ -186,4 +187,21 @@ for mx in '10 mx1.example.test' '20 mx2.example.test' '30 mx3.example.test'; do
 done
 
 printf 'presentation: clean\n'
+
+# The dashboard presents the original overview, with exactly one WHOIS probe.
+rich_out=$(DSU_TEST_WHOIS_LOG="$TMP/rich-whois.log" COLUMNS=124 check --color example.test)
+grep -q 'DOMAIN REPORT' <<<"$rich_out" || { echo 'FAIL: dashboard header missing' >&2; exit 1; }
+grep -q 'Example Registrar AS' <<<"$rich_out" || { echo 'FAIL: registrar missing from dashboard' >&2; exit 1; }
+grep -q 'DNS RECORDS.*MAIL & POLICY' <<<"$rich_out" || { echo 'FAIL: wide dashboard is not two columns' >&2; exit 1; }
+[[ "$(wc -l <"$TMP/rich-whois.log")" -eq 1 ]] || { echo 'FAIL: dashboard repeated WHOIS' >&2; exit 1; }
+plain_out=$(check --no-color --ascii --plain example.test)
+[[ "$plain_out" == "$check_out" ]] || { echo 'FAIL: --plain changed overview results' >&2; exit 1; }
+utility_out=$(COLUMNS=124 check --color example.test --dns A)
+! grep -q 'DOMAIN REPORT' <<<"$utility_out" || { echo 'FAIL: dashboard intercepted utility command' >&2; exit 1; }
+
+export DSU_TEST_DELAY=0.20
+rich_ms=$(measure_ms check --color example.test)
+printf 'dashboard:   %d ms\n' "$rich_ms"
+(( rich_ms < 2600 )) || { echo 'FAIL: dashboard exceeded cold-cache latency budget' >&2; exit 1; }
+
 printf '\nPerformance regression checks passed.\n'

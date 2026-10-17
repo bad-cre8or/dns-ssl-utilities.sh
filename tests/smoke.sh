@@ -255,3 +255,5 @@ HOME="$MIN_HOME" DSU_INSTALL_DIR="$MIN_HOME/share/dsu" DSU_BIN_DIR="$MIN_HOME/bi
 pass 'installer tolerates optional docs missing'
 
 printf '\nAll smoke tests passed.\n'
+
+python3 "$ROOT/tests/report.py"
