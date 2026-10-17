@@ -239,7 +239,8 @@ for obsolete in dsu dnsutil vulncheck sitecheck dns-ssl-utilities; do
 done
 alias_out=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" ssl --no-color cert --help); grep -q 'Usage: ssl cert' <<<"$alias_out" || fail 'installed ssl alias'
 check_help=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --no-color --ascii --help); grep -q 'check <domain-or-ip> \[flags\]' <<<"$check_help" || fail 'installed check help'
-check_version=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --version); grep -q '2.2.2' <<<"$check_version" || fail 'installed check version'
+check_version=$(HOME="$TEST_HOME" PATH="$TEST_HOME/bin:$PATH" check --version)
+[[ "$check_version" == "$("$CHECK" --version)" ]] || fail 'installed check version'
 check_dns=$(HOME="$TEST_HOME" PATH="$TMP/mockbin:$TEST_HOME/bin:$PATH" check example.test --no-color --ascii --dns); grep -q '192.0.2.10' <<<"$check_dns" || fail 'check --dns routing'
 pass 'installer and public entry points'
 
@@ -259,3 +260,4 @@ printf '\nAll smoke tests passed.\n'
 python3 "$ROOT/tests/report.py"
 python3 "$ROOT/tests/certificate.py"
 python3 "$ROOT/tests/presentation.py"
+python3 "$ROOT/tests/audit.py"

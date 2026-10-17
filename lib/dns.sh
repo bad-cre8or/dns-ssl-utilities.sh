@@ -5,21 +5,31 @@
 _dsu_dns_lookup_help() { dsu_help check dns; }
 
 _dsu_dig_lines() {
-  local type="$1" name="$2"
+  local type="$1" name="$2" output status
+  output=$(dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" +short +comments "$type" "$name" 2>/dev/null) || return 1
+  status=$(sed -nE 's/.*status:[[:space:]]*([A-Z]+),.*/\1/p' <<<"$output" | head -1)
+  case "$status" in ''|NOERROR|NXDOMAIN) ;; *) return 1 ;; esac
+  output=$(sed '/^;;/d; /^[[:space:]]*$/d' <<<"$output")
   case "${type^^}" in
     A)
-      dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" +short A "$name" 2>/dev/null \
-        | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print}'
+      awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print}' <<<"$output"
       ;;
     AAAA)
-      dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" +short AAAA "$name" 2>/dev/null \
-        | awk 'index($0, ":") {print}'
+      awk 'index($0, ":") {print}' <<<"$output"
       ;;
     *)
-      dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" +short "$type" "$name" 2>/dev/null | sed 's/\.$//'
+      sed '/^$/d; s/\.$//' <<<"$output"
       ;;
   esac
 }
+
+# Keep query status separately from record data across background jobs.
+_dsu_dns_capture() {
+  if _dsu_dig_lines "$1" "$2" >"$3"; then printf 'OK\n' >"$3.status";
+  else printf 'ERROR\n' >"$3.status"; fi
+}
+
+_dsu_dns_failed() { [[ -r "$1.status" && "$(<"$1.status")" == ERROR ]]; }
 
 _dsu_zone_apex_guess() {
   local host="$1" zone
@@ -118,7 +128,7 @@ _dsu_ptr_probe() {
 
 _dsu_print_rr() {
   local type="$1" name="$2" result
-  result=$(_dsu_dig_lines "$type" "$name")
+  result=$(_dsu_dig_lines "$type" "$name") || { dsu_bad "$type lookup failed; record presence is unknown"; return 1; }
   if [[ -n "$result" ]]; then
     while IFS= read -r line; do dsu_keyval "$type" "$line"; done <<< "$result"
   else
@@ -140,23 +150,26 @@ dsu_dns_lookup() {
     return
   fi
 
-  local tmp rr pid result
+  local tmp rr pid result failed=0
   local -a records=(A AAAA CNAME MX NS CAA SOA TXT) pids=()
   tmp=$(dsu_tmpdir) || return 1
   for rr in "${records[@]}"; do
-    (_dsu_dig_lines "$rr" "$host") >"$tmp/$rr" &
+    (_dsu_dns_capture "$rr" "$host" "$tmp/$rr") &
     pids+=("$!")
   done
   for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
   for rr in "${records[@]}"; do
     result=$(cat "$tmp/$rr" 2>/dev/null || true)
-    if [[ -n "$result" ]]; then
+    if _dsu_dns_failed "$tmp/$rr"; then
+      dsu_bad "$rr lookup failed; record presence is unknown"; failed=1
+    elif [[ -n "$result" ]]; then
       while IFS= read -r line; do dsu_keyval "$rr" "$line"; done <<< "$result"
     else
       dsu_keyval "$rr" "${DSU_GRAY}—${DSU_RESET}"
     fi
   done
   dsu_cleanup_dir "$tmp"
+  return "$failed"
 }
 
 dsu_dns_reverse() {
@@ -172,12 +185,16 @@ dsu_dns_reverse() {
   else
     dsu_valid_host "$host" || { dsu_bad "Invalid host: $input"; dsu_cleanup_dir "$tmp"; return 2; }
     local p1 p2
-    (_dsu_dig_lines A "$host") >"$tmp/A" & p1=$!
-    (_dsu_dig_lines AAAA "$host") >"$tmp/AAAA" & p2=$!
+    (_dsu_dns_capture A "$host" "$tmp/A") & p1=$!
+    (_dsu_dns_capture AAAA "$host" "$tmp/AAAA") & p2=$!
     wait "$p1" 2>/dev/null || true; wait "$p2" 2>/dev/null || true
     addresses="$(cat "$tmp/A" "$tmp/AAAA" 2>/dev/null | awk 'NF' | sort -u)"
   fi
-  [[ -n "$addresses" ]] || { dsu_warn "No A/AAAA addresses found"; dsu_cleanup_dir "$tmp"; return 1; }
+  if [[ -z "$addresses" ]]; then
+    if _dsu_dns_failed "$tmp/A" || _dsu_dns_failed "$tmp/AAAA"; then dsu_bad "Address lookup failed; reverse DNS targets are unknown";
+    else dsu_warn "No A/AAAA addresses found"; fi
+    dsu_cleanup_dir "$tmp"; return 1
+  fi
 
   local -a ips=() pids=()
   while IFS= read -r line; do
@@ -223,15 +240,23 @@ dsu_dns_mail() {
 
   tmp=$(dsu_tmpdir) || return 1
   local -a base_pids=()
-  (_dsu_dig_lines TXT "$host") >"$tmp/txt" & base_pids+=("$!")
-  (_dsu_dig_lines TXT "_dmarc.$host") >"$tmp/dmarc" & base_pids+=("$!")
-  (_dsu_dig_lines CAA "$host") >"$tmp/caa" & base_pids+=("$!")
-  (_dsu_dig_lines TXT "_mta-sts.$host") >"$tmp/mta" & base_pids+=("$!")
-  (_dsu_dig_lines TXT "_smtp._tls.$host") >"$tmp/tlsrpt" & base_pids+=("$!")
+  (_dsu_dns_capture MX "$host" "$tmp/mx") & base_pids+=("$!")
+  (_dsu_dns_capture TXT "$host" "$tmp/txt") & base_pids+=("$!")
+  (_dsu_dns_capture TXT "_dmarc.$host" "$tmp/dmarc") & base_pids+=("$!")
+  (_dsu_dns_capture CAA "$host" "$tmp/caa") & base_pids+=("$!")
+  (_dsu_dns_capture TXT "_mta-sts.$host" "$tmp/mta") & base_pids+=("$!")
+  (_dsu_dns_capture TXT "_smtp._tls.$host" "$tmp/tlsrpt") & base_pids+=("$!")
   for pid in "${base_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 
+  if _dsu_dns_failed "$tmp/mx"; then dsu_bad "MX lookup failed; record presence is unknown";
+  elif [[ -s "$tmp/mx" ]]; then
+    while IFS= read -r line; do dsu_keyval MX "$line"; done < <(sort -n "$tmp/mx")
+  else dsu_info "No MX records"; fi
+
   spf=$(tr -d '"' <"$tmp/txt" | grep -i '^v=spf1' | head -1)
-  if [[ -z "$spf" ]]; then
+  if _dsu_dns_failed "$tmp/txt"; then
+    dsu_bad "SPF lookup failed; record presence is unknown"
+  elif [[ -z "$spf" ]]; then
     dsu_warn "SPF: missing"
   else
     dsu_ok "SPF: $spf"
@@ -239,7 +264,9 @@ dsu_dns_mail() {
   fi
 
   dmarc=$(tr -d '"' <"$tmp/dmarc" | grep -i '^v=DMARC1' | head -1)
-  if [[ -z "$dmarc" ]]; then
+  if _dsu_dns_failed "$tmp/dmarc"; then
+    dsu_bad "DMARC lookup failed; record presence is unknown"
+  elif [[ -z "$dmarc" ]]; then
     dsu_warn "DMARC: missing"
   else
     dsu_ok "DMARC: $dmarc"
@@ -249,13 +276,16 @@ dsu_dns_mail() {
   fi
 
   caa=$(cat "$tmp/caa")
-  [[ -n "$caa" ]] && dsu_ok "CAA present" || dsu_warn "CAA: missing"
+  if _dsu_dns_failed "$tmp/caa"; then dsu_bad "CAA lookup failed; record presence is unknown";
+  elif [[ -n "$caa" ]]; then dsu_ok "CAA present"; else dsu_warn "CAA: missing"; fi
   [[ -n "$caa" ]] && while IFS= read -r line; do dsu_dim "CAA $line"; done <<< "$caa"
 
   mta=$(tr -d '"' <"$tmp/mta" | grep -i '^v=STSv1' | head -1)
-  [[ -n "$mta" ]] && dsu_ok "MTA-STS TXT: $mta" || dsu_info "MTA-STS TXT: not found"
+  if _dsu_dns_failed "$tmp/mta"; then dsu_bad "MTA-STS lookup failed; record presence is unknown";
+  elif [[ -n "$mta" ]]; then dsu_ok "MTA-STS TXT: $mta"; else dsu_info "MTA-STS TXT: not found"; fi
   tlsrpt=$(tr -d '"' <"$tmp/tlsrpt" | grep -i '^v=TLSRPTv1' | head -1)
-  [[ -n "$tlsrpt" ]] && dsu_ok "SMTP TLS reporting: $tlsrpt" || dsu_info "SMTP TLS reporting: not found"
+  if _dsu_dns_failed "$tmp/tlsrpt"; then dsu_bad "SMTP TLS reporting lookup failed; record presence is unknown";
+  elif [[ -n "$tlsrpt" ]]; then dsu_ok "SMTP TLS reporting: $tlsrpt"; else dsu_info "SMTP TLS reporting: not found"; fi
 
   local selectors=()
   if [[ -n "$selector" ]]; then
@@ -267,13 +297,14 @@ dsu_dns_mail() {
   local -a dkim_pids=()
   for s in "${selectors[@]}"; do
     ((i+=1))
-    (_dsu_dig_lines TXT "${s}._domainkey.$host") >"$tmp/dkim.$i" &
+    (_dsu_dns_capture TXT "${s}._domainkey.$host" "$tmp/dkim.$i") &
     dkim_pids+=("$!")
   done
   for pid in "${dkim_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
   i=0
   for s in "${selectors[@]}"; do
     ((i+=1))
+    if _dsu_dns_failed "$tmp/dkim.$i"; then dsu_bad "DKIM selector $s lookup failed; record presence is unknown"; found=1; continue; fi
     dkim=$(tr -d '"' <"$tmp/dkim.$i" | grep -i 'v=DKIM1' | head -1)
     if [[ -n "$dkim" ]]; then dsu_ok "DKIM selector ${DSU_BOLD}$s${DSU_RESET}: found"; dsu_dim "$dkim"; found=1; fi
   done
@@ -288,8 +319,8 @@ dsu_dns_dnssec() {
   host=$(dsu_normalize_host "$input")
   dsu_valid_host "$host" || { dsu_bad "Invalid domain: $input"; return 2; }
   dsu_section "DNSSEC · $host"
-  dnskey=$(_dsu_dig_lines DNSKEY "$host")
-  ds=$(_dsu_dig_lines DS "$host")
+  dnskey=$(_dsu_dig_lines DNSKEY "$host") || { dsu_bad "DNSKEY lookup failed; DNSSEC state is unknown"; return 1; }
+  ds=$(_dsu_dig_lines DS "$host") || { dsu_bad "DS lookup failed; DNSSEC state is unknown"; return 1; }
   if [[ -n "$dnskey" ]]; then dsu_ok "DNSKEY present"; else dsu_warn "DNSKEY not found"; fi
   if [[ -n "$ds" ]]; then dsu_ok "DS present at parent/resolver view"; else dsu_warn "DS not found"; fi
   ad=$(dig A "$host" +dnssec 2>/dev/null | awk -F'flags: ' '/flags:/ {print $2; exit}')

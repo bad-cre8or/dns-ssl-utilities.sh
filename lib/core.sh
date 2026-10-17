@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared runtime helpers for dns-ssl-utilities.
 
-DSU_VERSION="2.2.2"
+DSU_VERSION="2.2.3"
 DSU_NAME="DNS + SSL Utilities"
 DSU_HOME="${DSU_HOME:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 DSU_CONNECT_TIMEOUT="${DSU_CONNECT_TIMEOUT:-4}"
@@ -249,13 +249,21 @@ PYIP
 }
 dsu_extract_port() {
   local input="$1" default="${2:-443}"
-  input="${input#http://}"; input="${input#https://}"; input="${input%%/*}"
-  if [[ "$input" =~ :([0-9]+)$ && "$input" != *:*:* ]]; then printf '%s' "${BASH_REMATCH[1]}"; else printf '%s' "$default"; fi
+  input="${input#http://}"; input="${input#https://}"; input="${input#ftp://}"
+  input="${input%%[/?#]*}"
+  if [[ "$input" == \[*\]:* ]]; then
+    printf '%s' "${input##*]:}"
+  elif [[ "$input" == *:* && "$input" != *:*:* ]]; then
+    printf '%s' "${input#*:}"
+  else
+    printf '%s' "$default"
+  fi
 }
 
 dsu_valid_port() {
   local port="${1:-}"
-  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  # Bound arithmetic input before evaluating it (huge integers can overflow).
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
   (( 10#$port >= 1 && 10#$port <= 65535 ))
 }
 
@@ -286,9 +294,10 @@ dsu_tmpdir() {
 dsu_cleanup_dir() { [[ -n "${1:-}" && -d "$1" ]] && rm -rf -- "$1"; }
 
 dsu_http_headers() {
-  local url="$1"; shift
-  curl -ksS -D - -o /dev/null --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" \
-    -A "$DSU_USER_AGENT" "$@" "$url" 2>/dev/null
+  local url="$1" headers; shift
+  headers=$(curl -ksS -D - -o /dev/null --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" \
+    -A "$DSU_USER_AGENT" "$@" "$url" 2>/dev/null) || return 1
+  printf '%s\n' "$headers"
 }
 
 dsu_http_status() {
@@ -297,23 +306,24 @@ dsu_http_status() {
   output=$(curl -ksS -o /dev/null -w '%{http_code}' --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" \
     -A "$DSU_USER_AGENT" "$@" "$url" 2>/dev/null)
   rc=$?
-  if [[ "$output" =~ ([0-9]{3})$ ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-  elif (( rc != 0 )); then
+  if (( rc != 0 )); then
     printf '000'
+  elif [[ "$output" =~ ([0-9]{3})$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
   else
     printf '%s' "${output:-000}"
   fi
 }
 
 dsu_http_final_headers() {
-  local url="$1"; shift
-  curl -ksS -D - -o /dev/null -L --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" \
-    -A "$DSU_USER_AGENT" "$@" "$url" 2>/dev/null | awk '''
+  local url="$1" headers; shift
+  headers=$(curl -ksS -D - -o /dev/null -L --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" \
+    -A "$DSU_USER_AGENT" "$@" "$url" 2>/dev/null) || return 1
+  printf '%s\n' "$headers" | awk '
       /^HTTP\// { block=$0 ORS; next }
       { block=block $0 ORS }
       END { printf "%s", block }
-    '''
+    '
 }
 
 dsu_header_value() {
@@ -368,10 +378,13 @@ dsu_openssl_connection() {
 }
 
 dsu_days_until() {
-  local date_string="$1" expiry now
+  local date_string="$1" expiry now delta
   expiry=$(date -d "$date_string" +%s 2>/dev/null) || return 1
   now=$(date +%s)
-  printf '%d' $(( (expiry - now) / 86400 ))
+  delta=$((expiry - now))
+  # Bash truncates toward zero; even one second past expiry must stay negative.
+  if (( delta < 0 )); then printf '%d' $(( (delta - 86399) / 86400 ));
+  else printf '%d' $(( delta / 86400 )); fi
 }
 
 dsu_shell_quote() { printf '%q' "$1"; }

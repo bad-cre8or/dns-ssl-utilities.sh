@@ -101,23 +101,34 @@ dsu_ssl_fetch() {
 }
 
 _dsu_tls_probe() {
-  local flag="$1" host="$2" port="$3" target
+  local flag="$1" host="$2" port="$3" target output rc=0
   target=$(dsu_socket_target "$host" "$port")
-  timeout "$DSU_MAX_TIME" openssl s_client "$flag" -servername "$host" -connect "$target" </dev/null 2>&1 | grep -qE '^Protocol *:|^ *Protocol *:'
+  output=$(timeout "$DSU_MAX_TIME" openssl s_client -brief "$flag" -servername "$host" -connect "$target" </dev/null 2>&1) || rc=$?
+  # Both a protocol and a real cipher prove negotiation. A failed handshake can
+  # still print a Protocol field; TLS 1.3 uses different verbose output entirely.
+  (( rc != 124 && rc != 127 )) || return 2
+  if grep -qE '^[[:space:]]*Protocol( version)?[[:space:]]*:[[:space:]]*(TLSv|SSLv)' <<<"$output" &&
+    grep -qE '^[[:space:]]*(Ciphersuite|Cipher)[[:space:]]*:[[:space:]]*[^[:space:]]+' <<<"$output" &&
+    ! grep -qE '^[[:space:]]*(Ciphersuite|Cipher)[[:space:]]*:[[:space:]]*(\(NONE\)|NONE|0000)([[:space:]]|$)' <<<"$output"; then return 0; fi
+  if grep -qiE 'alert protocol version|unsupported protocol|no protocols available|alert handshake failure|no shared cipher|Cipher[[:space:]]*:[[:space:]]*\(NONE\)' <<<"$output"; then return 1; fi
+  return 2
 }
 
 dsu_ssl_versions() {
-  local input="${1:-}" port host flag label
+  local input="${1:-}" port host flag label openssl_help rc
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl versions <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
   IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   dsu_section "TLS versions · $host:$port"
+  openssl_help=$(openssl s_client -help 2>&1 || true)
   while IFS=$'\t' read -r flag label; do
-    if openssl s_client -help 2>&1 | grep -q -- "$flag"; then
+    if grep -q -- "$flag" <<<"$openssl_help"; then
       if _dsu_tls_probe "$flag" "$host" "$port"; then
         case "$flag" in -tls1|-tls1_1|-ssl3) dsu_warn "$label supported (legacy)" ;; *) dsu_ok "$label supported" ;; esac
       else
-        dsu_info "$label not supported"
+        rc=$?
+        if (( rc == 2 )); then dsu_warn "$label probe failed; support is unknown";
+        else dsu_info "$label not negotiated (server or local TLS policy)"; fi
       fi
     else
       dsu_dim "$label probe unavailable in this OpenSSL build"
@@ -194,7 +205,7 @@ dsu_ssl_ocsp() {
 }
 
 dsu_ssl_crl() {
-  local input="${1:-}" port host tmp uri serial format conn issuer leaf_issuer crl_issuer
+  local input="${1:-}" port host tmp uri serial format conn issuer leaf_issuer crl_issuer last next now
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl crl <domain> [port]"; return 2; }
   dsu_need openssl openssl || return
   dsu_need curl curl || return
@@ -223,8 +234,21 @@ dsu_ssl_crl() {
     dsu_cleanup_dir "$tmp"
     return 1
   fi
+  last=$(openssl crl -in "$tmp/crl" -inform "$format" -noout -lastupdate | cut -d= -f2-)
+  next=$(openssl crl -in "$tmp/crl" -inform "$format" -noout -nextupdate | cut -d= -f2-)
+  last=$([[ -n "$last" ]] && date -d "$last" +%s 2>/dev/null) || last=''
+  next=$([[ -n "$next" ]] && date -d "$next" +%s 2>/dev/null) || next=''
+  now=$(date +%s)
+  if [[ -z "$last" || -z "$next" ]] || (( last > now || next <= now )); then
+    dsu_bad "CRL is stale, not yet valid, or missing validity dates; revocation status is UNKNOWN"
+    dsu_cleanup_dir "$tmp"
+    return 1
+  fi
   serial=$(openssl x509 -in "$tmp/leaf.pem" -noout -serial | cut -d= -f2 | tr -d ':')
-  if openssl crl -in "$tmp/crl" -inform "$format" -noout -text 2>/dev/null | tr -d ':' | grep -qi "Serial Number *$serial"; then
+  if openssl crl -in "$tmp/crl" -inform "$format" -noout -text 2>/dev/null | awk -v serial="$serial" '
+      /Serial Number:/ { sub(/.*Serial Number:[[:space:]]*/, ""); gsub(":", ""); sub(/^[0]+/, "");
+        sub(/^[0]+/, "", serial); if (toupper($0)==toupper(serial)) found=1 }
+      END { exit !found }'; then
     dsu_bad "Certificate serial is listed as REVOKED"
     dsu_cleanup_dir "$tmp"
     return 2
@@ -273,20 +297,25 @@ dsu_ssl_performance() {
 }
 
 dsu_ssl_fingerprint() {
-  local input="${1:-}" expected="${2:-}" port host tmp fp norm_expected norm_actual
+  local input="${1:-}" expected="${2:-}" port host tmp fp norm_expected norm_actual rc=0
   [[ -n "$input" ]] || { dsu_bad "Usage: ssl fingerprint <domain> [expected-sha256] [port]"; return 2; }
+  dsu_need openssl openssl || return
+  norm_expected=$(printf '%s' "$expected" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+  [[ -z "$expected" || "$norm_expected" =~ ^[0-9A-F]{64}$ ]] || { dsu_bad "Expected SHA-256 fingerprint must contain 64 hexadecimal digits"; return 2; }
   IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${3:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   tmp=$(dsu_tmpdir) || return 1
   if ! dsu_fetch_leaf_cert "$host" "$port" "$tmp/cert.pem"; then dsu_bad "Could not retrieve certificate"; dsu_cleanup_dir "$tmp"; return 1; fi
-  fp=$(openssl x509 -in "$tmp/cert.pem" -noout -sha256 -fingerprint | cut -d= -f2-)
+  fp=$(openssl x509 -in "$tmp/cert.pem" -noout -sha256 -fingerprint | cut -d= -f2-) || { dsu_cleanup_dir "$tmp"; return 1; }
+  norm_actual=$(printf '%s' "$fp" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+  [[ "$norm_actual" =~ ^[0-9A-F]{64}$ ]] || { dsu_bad "Could not read SHA-256 fingerprint"; dsu_cleanup_dir "$tmp"; return 1; }
   dsu_section "Certificate fingerprint · $host:$port"
   dsu_keyval "SHA-256" "$fp"
   if [[ -n "$expected" ]]; then
-    norm_expected=$(printf '%s' "$expected" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
-    norm_actual=$(printf '%s' "$fp" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
-    [[ "$norm_actual" == "$norm_expected" ]] && dsu_ok "Fingerprint matches expected value" || dsu_bad "Fingerprint does not match expected value"
+    if [[ "$norm_actual" == "$norm_expected" ]]; then dsu_ok "Fingerprint matches expected value";
+    else dsu_bad "Fingerprint does not match expected value"; rc=1; fi
   fi
   dsu_cleanup_dir "$tmp"
+  return "$rc"
 }
 
 _dsu_file_kind() {
@@ -350,7 +379,8 @@ dsu_ssl_match() {
   if (( mismatch )); then dsu_bad "Public keys do not all match"; return 1; else dsu_ok "All supplied files use the same public key"; fi
 }
 
-dsu_ssl_new() {
+dsu_ssl_new() (
+  umask 077
   local cn="${1:-}"; shift || true
   [[ -n "$cn" && "$cn" != --* ]] || { dsu_bad "Usage: ssl new <common-name> [--san NAME] [--out PREFIX] [--rsa BITS|--ec CURVE] [--encrypted]"; return 2; }
   dsu_need openssl openssl || return
@@ -362,7 +392,7 @@ dsu_ssl_new() {
       --san) [[ $# -gt 0 ]] || { dsu_bad "--san requires a value"; return 2; }; sans+=("$1"); shift ;;
       --out) [[ $# -gt 0 ]] || { dsu_bad "--out requires a prefix"; return 2; }; prefix="$1"; shift ;;
       --rsa) key_type=rsa; [[ $# -gt 0 ]] && [[ "$1" =~ ^[0-9]+$ ]] && { bits="$1"; shift; } ;;
-      --ec) key_type=ec; [[ $# -gt 0 ]] && { curve="$1"; shift; } ;;
+      --ec) key_type=ec; if [[ $# -gt 0 && "$1" != --* ]]; then curve="$1"; shift; fi ;;
       --encrypted) encrypted=1 ;;
       --help|-h) dsu_info "Usage: ssl new <CN> [--san NAME] [--out PREFIX] [--rsa BITS|--ec CURVE] [--encrypted]"; return 0 ;;
       *) dsu_bad "Unknown option: $arg"; return 2 ;;
@@ -379,6 +409,7 @@ dsu_ssl_new() {
     if dsu_is_ip "$name"; then san_csv+="IP:$name"; else san_csv+="DNS:$name"; fi
   done
   dsu_section "Create CSR · $cn"
+  trap 'rc=$?; if (( rc != 0 )); then rm -f -- "$key" "$csr"; fi' EXIT
   if [[ "$key_type" == rsa ]]; then
     if (( encrypted )); then openssl genpkey -quiet -algorithm RSA -pkeyopt "rsa_keygen_bits:$bits" -aes-256-cbc -out "$key" || return 1
     else openssl genpkey -quiet -algorithm RSA -pkeyopt "rsa_keygen_bits:$bits" -out "$key" || return 1; fi
@@ -386,7 +417,9 @@ dsu_ssl_new() {
     if (( encrypted )); then openssl genpkey -quiet -algorithm EC -pkeyopt "ec_paramgen_curve:$curve" -aes-256-cbc -out "$key" || return 1
     else openssl genpkey -quiet -algorithm EC -pkeyopt "ec_paramgen_curve:$curve" -out "$key" || return 1; fi
   fi
-  if openssl req -help 2>&1 | grep -q -- '-addext'; then
+  local req_help
+  req_help=$(openssl req -help 2>&1 || true)
+  if grep -q -- '-addext' <<<"$req_help"; then
     openssl req -new -key "$key" -out "$csr" -subj "/CN=$cn" -addext "subjectAltName=$san_csv" || return 1
   else
     local tmpcfg; tmpcfg=$(mktemp)
@@ -408,62 +441,65 @@ CFG
   dsu_ok "CSR: $csr"
   dsu_keyval "SANs" "$san_csv"
   openssl req -in "$csr" -noout -verify >/dev/null 2>&1 && dsu_ok "CSR signature verifies"
-}
+)
 
-dsu_ssl_pack() {
+dsu_ssl_pack() (
+  umask 077
   local cert="${1:-}" key="${2:-}" chain="${3:-}" out="${4:-certificate.pfx}"
   [[ -f "$cert" && -f "$key" ]] || { dsu_bad "Usage: ssl pack <certificate.pem> <private.key> [chain.pem] [output.pfx]"; return 2; }
   dsu_need openssl openssl || return
-  if [[ -n "$chain" && ! -f "$chain" ]]; then
-    if [[ "$chain" == *.pfx || "$chain" == *.p12 ]]; then out="$chain"; chain=""; else dsu_bad "Chain file not found: $chain"; return 2; fi
-  fi
+  if (( $# == 3 )) && [[ "$chain" == *.pfx || "$chain" == *.p12 ]]; then out="$chain"; chain=""; fi
+  [[ -z "$chain" || -f "$chain" ]] || { dsu_bad "Chain file not found: $chain"; return 2; }
   [[ ! -e "$out" && ! -L "$out" ]] || { dsu_bad "Refusing to overwrite existing bundle: $out"; return 2; }
   local password="${DSU_PFX_PASSWORD:-}" confirm=""
   if [[ -z "${DSU_PFX_PASSWORD+x}" ]]; then
     printf '%s' "PFX password (blank allowed): " >&2
-    IFS= read -rs password; printf '\n' >&2
+    IFS= read -rs password || { printf '\n' >&2; dsu_bad "Password input cancelled"; return 1; }; printf '\n' >&2
     printf '%s' "Confirm PFX password: " >&2
-    IFS= read -rs confirm; printf '\n' >&2
+    IFS= read -rs confirm || { printf '\n' >&2; dsu_bad "Password input cancelled"; return 1; }; printf '\n' >&2
     [[ "$password" == "$confirm" ]] || { dsu_bad "Passwords do not match"; return 2; }
   fi
-  export DSU_PFX_PASS="$password"
-  local args=(pkcs12 -export -out "$out" -inkey "$key" -in "$cert" -passout env:DSU_PFX_PASS)
+  export DSU_PFX_PACK_PASS="$password"
+  local args=(pkcs12 -export -out "$out" -inkey "$key" -in "$cert" -passout env:DSU_PFX_PACK_PASS)
   [[ -n "$chain" ]] && args+=(-certfile "$chain")
   dsu_section "Create PKCS#12 · $out"
   if openssl "${args[@]}"; then
     dsu_ok "Created $out"
-    unset DSU_PFX_PASS password confirm
+    unset DSU_PFX_PACK_PASS password confirm
   else
-    unset DSU_PFX_PASS password confirm
+    unset DSU_PFX_PACK_PASS password confirm
+    rm -f -- "$out"
     dsu_bad "PFX creation failed"
     return 1
   fi
-}
+)
 
-dsu_ssl_extract() {
+dsu_ssl_extract() (
+  umask 077
   local pfx="${1:-}" outdir="${2:-}"
   [[ -f "$pfx" ]] || { dsu_bad "Usage: ssl extract <bundle.pfx> [output-directory]"; return 2; }
   dsu_need openssl openssl || return
   if [[ -z "$outdir" ]]; then outdir="${pfx##*/}"; outdir="${outdir%.*}-extracted"; fi
   [[ ! -e "$outdir" && ! -L "$outdir" ]] || { dsu_bad "Refusing to overwrite existing extraction directory: $outdir"; return 2; }
-  mkdir -p "$outdir" || return 1
-  chmod 700 "$outdir" || { dsu_cleanup_dir "$outdir"; return 1; }
   local password
   printf '%s' "PFX password (blank if none): " >&2
-  IFS= read -rs password; printf '\n' >&2
-  export DSU_PFX_PASS="$password"
+  IFS= read -rs password || { printf '\n' >&2; dsu_bad "Password input cancelled"; return 1; }; printf '\n' >&2
+  mkdir -p -- "$(dirname -- "$outdir")" || return 1
+  mkdir -- "$outdir" || return 1
+  chmod 700 "$outdir" || { dsu_cleanup_dir "$outdir"; return 1; }
+  export DSU_PFX_EXTRACT_PASS="$password"
   dsu_section "Extract PKCS#12 · $pfx"
   : >"$outdir/private-key.pem"; chmod 600 "$outdir/private-key.pem"
-  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -clcerts -nokeys -out "$outdir/certificate.pem" || { unset DSU_PFX_PASS; dsu_cleanup_dir "$outdir"; return 1; }
-  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -cacerts -nokeys -out "$outdir/ca-chain.pem" || true
-  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_PASS -nocerts -nodes -out "$outdir/private-key.pem" || { unset DSU_PFX_PASS; dsu_cleanup_dir "$outdir"; return 1; }
-  unset DSU_PFX_PASS password
+  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_EXTRACT_PASS -clcerts -nokeys -out "$outdir/certificate.pem" || { unset DSU_PFX_EXTRACT_PASS; dsu_cleanup_dir "$outdir"; return 1; }
+  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_EXTRACT_PASS -cacerts -nokeys -out "$outdir/ca-chain.pem" || { unset DSU_PFX_EXTRACT_PASS; dsu_cleanup_dir "$outdir"; return 1; }
+  openssl pkcs12 -in "$pfx" -passin env:DSU_PFX_EXTRACT_PASS -nocerts -nodes -out "$outdir/private-key.pem" || { unset DSU_PFX_EXTRACT_PASS; dsu_cleanup_dir "$outdir"; return 1; }
+  unset DSU_PFX_EXTRACT_PASS password
   chmod 600 "$outdir/private-key.pem"
   [[ -s "$outdir/ca-chain.pem" ]] || rm -f "$outdir/ca-chain.pem"
   dsu_ok "Certificate: $outdir/certificate.pem"
   [[ -f "$outdir/ca-chain.pem" ]] && dsu_ok "CA chain: $outdir/ca-chain.pem"
   dsu_warn "Private key extracted unencrypted: $outdir/private-key.pem (mode 600)"
-}
+)
 
 dsu_ssl_dispatch() {
   local cmd="${1:-help}"; shift || true
