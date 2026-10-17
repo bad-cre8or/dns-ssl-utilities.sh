@@ -170,11 +170,14 @@ class Layout:
         return (self.paint(self.v, 'edge') + ' ' + ''.join(segments) +
                 ' ' * max(0, width - 4 - used) + ' ' + self.paint(self.v, 'edge'))
 
-    def panel(self, title, rows, width, reverse=False):
+    def panel(self, title, rows, width, reverse=False, label_limit=12, label_role='muted'):
+        if cells(title) > width - 6:
+            rows = [Row('', '', title)] + list(rows)
+            title = 'SECTION'
         # Reserve a compact label column; PTR addresses can use more room.
         inner = width - 4
         label_width = min(max((cells(r.label) for r in rows), default=0),
-                          39 if reverse else 12, max(0, inner // 2 - 2))
+                          39 if reverse else label_limit, max(0, inner // 2 - 2))
         value_width = max(1, inner - label_width - 4)
         output = [self.border(width, title)]
         previous = None
@@ -189,7 +192,8 @@ class Layout:
                 mark = self.glyph(row.status) if index == 0 else ' '
                 prefix = mark + ' ' + key + ' ' * (label_width - cells(key)) + '  '
                 segments = [self.paint(mark, row.status or 'muted') + ' ',
-                            self.paint(key + ' ' * (label_width - cells(key)), 'muted'),
+                            self.paint(key + ' ' * (label_width - cells(key)),
+                                       row.status if row.label in {'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'} else label_role),
                             '  ', self.paint(value)]
                 output.append(self.enclosed(segments, cells(prefix) + cells(value), width))
             previous = row.label
@@ -218,12 +222,12 @@ class Layout:
         lines.append(self.border(width, bottom=True))
         return lines
 
-    def pair(self, left, right):
+    def pair(self, left, right, **panel_options):
         if self.width < 110:
-            return self.panel(*left, self.width) + [''] + self.panel(*right, self.width)
+            return self.panel(*left, self.width, **panel_options) + [''] + self.panel(*right, self.width, **panel_options)
         left_width = (self.width - 2) // 2
         right_width = self.width - 2 - left_width
-        a, b = self.panel(*left, left_width), self.panel(*right, right_width)
+        a, b = self.panel(*left, left_width, **panel_options), self.panel(*right, right_width, **panel_options)
         height = max(len(a), len(b))
         a[-1:-1] = [self.enclosed([], 0, left_width)] * (height - len(a))
         b[-1:-1] = [self.enclosed([], 0, right_width)] * (height - len(b))

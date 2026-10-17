@@ -2,15 +2,7 @@
 
 # shellcheck source=lib/core.sh
 
-_dsu_dns_lookup_help() {
-  cat <<EOF_HELP
-${DSU_BOLD}DNS lookup${DSU_RESET}
-Usage: check <domain> --dns [TYPE]
-
-TYPE may be A, AAAA, MX, NS, TXT, CAA, SOA, CNAME, SRV, DS, DNSKEY or ALL.
-When TYPE is omitted, a curated multi-record summary is shown.
-EOF_HELP
-}
+_dsu_dns_lookup_help() { dsu_help check dns; }
 
 _dsu_dig_lines() {
   local type="$1" name="$2"
