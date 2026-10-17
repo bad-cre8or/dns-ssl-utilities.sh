@@ -33,12 +33,19 @@ fi
 _dsu_apply_colors() {
   if (( _dsu_color_enabled )); then
     DSU_RESET=$'\033[0m'; DSU_BOLD=$'\033[1m'; DSU_DIM=$'\033[2m'
-    DSU_RED=$'\033[38;5;203m'; DSU_GREEN=$'\033[38;5;114m'; DSU_YELLOW=$'\033[38;5;220m'
-    DSU_BLUE=$'\033[38;5;75m'; DSU_MAGENTA=$'\033[38;5;176m'; DSU_CYAN=$'\033[38;5;81m'
-    DSU_GRAY=$'\033[38;5;245m'; DSU_WHITE=$'\033[38;5;255m'
+    # Tokyo Night, with a 256-color fallback for older terminals.
+    if [[ "${COLORTERM:-}" == truecolor || "${COLORTERM:-}" == 24bit ]]; then
+      DSU_RED=$'\033[38;2;247;118;142m'; DSU_GREEN=$'\033[38;2;158;206;106m'; DSU_YELLOW=$'\033[38;2;224;175;104m'
+      DSU_BLUE=$'\033[38;2;122;162;247m'; DSU_MAGENTA=$'\033[38;2;187;154;247m'; DSU_CYAN=$'\033[38;2;125;207;255m'
+      DSU_GRAY=$'\033[38;2;145;156;194m'; DSU_WHITE=$'\033[38;2;192;202;245m'; DSU_RULE=$'\033[38;2;59;66;97m'
+    else
+      DSU_RED=$'\033[38;5;210m'; DSU_GREEN=$'\033[38;5;150m'; DSU_YELLOW=$'\033[38;5;180m'
+      DSU_BLUE=$'\033[38;5;111m'; DSU_MAGENTA=$'\033[38;5;147m'; DSU_CYAN=$'\033[38;5;117m'
+      DSU_GRAY=$'\033[38;5;103m'; DSU_WHITE=$'\033[38;5;189m'; DSU_RULE=$'\033[38;5;60m'
+    fi
   else
     DSU_RESET=''; DSU_BOLD=''; DSU_DIM=''; DSU_RED=''; DSU_GREEN=''; DSU_YELLOW=''
-    DSU_BLUE=''; DSU_MAGENTA=''; DSU_CYAN=''; DSU_GRAY=''; DSU_WHITE=''
+    DSU_BLUE=''; DSU_MAGENTA=''; DSU_CYAN=''; DSU_GRAY=''; DSU_WHITE=''; DSU_RULE=''
   fi
 }
 _dsu_apply_colors
@@ -56,22 +63,60 @@ dsu_banner() {
 }
 
 dsu_section() {
-  printf '\n%s%s%s %s%s\n' "$DSU_BOLD" "$DSU_BLUE" "$(_dsu_icon '◆' '==')" "$1" "$DSU_RESET"
+  # Preserve compact/plain output for logs and ASCII consumers.
+  if (( ! _dsu_color_enabled )) || [[ "${DSU_ASCII:-0}" == 1 ]]; then
+    printf '\n%s%s%s %s%s\n' "$DSU_BOLD" "$DSU_BLUE" "$(_dsu_icon '◆' '==')" "$1" "$DSU_RESET"
+    return 0
+  fi
+
+  local width=80 columns="${COLUMNS:-}" size count rule
+  # Non-interactive Bash does not always inherit the shell's COLUMNS value.
+  if [[ ! "$columns" =~ ^[0-9]{1,3}$ && -t 1 ]] && dsu_has stty; then
+    size=$(stty size <&1 2>/dev/null) || size=''
+    columns="${size##* }"
+  fi
+  if [[ "$columns" =~ ^[0-9]{1,3}$ ]]; then width=$((10#$columns)); fi
+  (( width > 88 )) && width=88
+  (( width < 24 )) && width=24
+  count=$((width - ${#1} - 6))
+  (( count < 0 )) && count=0
+  printf -v rule '%*s' "$count" ''
+  rule="${rule// /─}"
+  printf '\n%s◆%s %s%s%s %s%s%s\n' \
+    "$DSU_BLUE" "$DSU_RESET" "$DSU_BOLD" "$DSU_WHITE" "$1" \
+    "$DSU_RULE" "$rule" "$DSU_RESET"
 }
 
 dsu_subsection() {
   printf '\n%s%s%s%s\n' "$DSU_BOLD" "$DSU_MAGENTA" "$1" "$DSU_RESET"
 }
 
-dsu_ok()   { printf '  %s%s%s  %s\n' "$DSU_GREEN" "$(_dsu_icon '✔' '[OK]')" "$DSU_RESET" "$*"; }
-dsu_warn() { printf '  %s%s%s  %s\n' "$DSU_YELLOW" "$(_dsu_icon '⚠' '[!]')" "$DSU_RESET" "$*"; }
-dsu_bad()  { printf '  %s%s%s  %s\n' "$DSU_RED" "$(_dsu_icon '✘' '[X]')" "$DSU_RESET" "$*"; }
-dsu_info() { printf '  %s%s%s  %s\n' "$DSU_CYAN" "$(_dsu_icon '•' '[i]')" "$DSU_RESET" "$*"; }
+# Highlight short field labels without changing their text or spacing.
+# Never interpret diagnostic text as a printf format or an escape sequence.
+_dsu_message() {
+  local color="$1" unicode="$2" ascii="$3" text="$4" label
+  printf '  %s%s%s  ' "$color" "$(_dsu_icon "$unicode" "$ascii")" "$DSU_RESET"
+  label="${text%%: *}"
+  if (( _dsu_color_enabled )) && [[ "$text" == *': '* && ${#label} -le 28 && "$label" != *$'\033'* ]]; then
+    printf '%s%s%s: %s%s%s\n' "$DSU_CYAN" "$label" "$DSU_RESET" "$DSU_WHITE" "${text#*: }" "$DSU_RESET"
+  else
+    printf '%s%s%s\n' "$DSU_WHITE" "$text" "$DSU_RESET"
+  fi
+}
+
+dsu_ok()   { _dsu_message "$DSU_GREEN"  '✔' '[OK]' "$*"; }
+dsu_warn() { _dsu_message "$DSU_YELLOW" '⚠' '[!]'  "$*"; }
+dsu_bad()  { _dsu_message "$DSU_RED"    '✘' '[X]'  "$*"; }
+dsu_info() { _dsu_message "$DSU_CYAN"   '•' '[i]'  "$*"; }
 dsu_dim()  { printf '  %s%s%s\n' "$DSU_GRAY" "$*" "$DSU_RESET"; }
 
 dsu_keyval() {
   local key="$1"; shift
-  printf '  %s%-18s%s %s\n' "$DSU_GRAY" "$key" "$DSU_RESET" "$*"
+  if (( _dsu_color_enabled )) && [[ "${DSU_ASCII:-0}" != 1 ]]; then
+    printf '  %s%-18s%s │ %s%s%s\n' "$DSU_GRAY" "$key" "$DSU_RULE" "$DSU_WHITE" "$*" "$DSU_RESET"
+  else
+    printf '  %s%-18s%s %s\n' "$DSU_GRAY" "$key" "$DSU_RESET" "$*"
+  fi
 }
 
 dsu_die() { dsu_bad "$*" >&2; return 1; }
