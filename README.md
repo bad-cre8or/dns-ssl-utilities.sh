@@ -808,11 +808,32 @@ This keeps audits faster without unnecessarily hammering the target.
 
 Colored output is enabled automatically when appropriate.
 
+The terminal presentation uses a Tokyo Night palette, subtle section dividers,
+cyan field labels, and aligned key/value rows. True-color terminals get the
+full palette; other color terminals use a 256-color fallback. Dividers adapt
+to the terminal width, up to 88 columns, while long diagnostic values wrap
+naturally without being truncated. No additional runtime dependencies are needed.
+
+![Tokyo Night terminal output, rendered with sample responses](docs/terminal-preview.png)
+
+*Illustrative overview using mocked DNS, WHOIS, HTTP, and TLS responses for
+`example.test`; this is not a live domain report. Your terminal controls the
+background and font.*
+
 Disable it with:
 
 ```bash
 NO_COLOR=1 check example.com
 ```
+
+For plain ASCII headings and status markers:
+
+```bash
+check example.com --no-color --ascii
+```
+
+Plain output keeps the compact layout, without decorative dividers. To force
+ANSI colors when capturing output, use `--color`.
 
 Useful for:
 
