@@ -6,6 +6,17 @@ INSTALL_DIR="${DSU_INSTALL_DIR:-$HOME/.local/share/dns-ssl-utilities}"
 BIN_DIR="${DSU_BIN_DIR:-$HOME/.local/bin}"
 FORCE=0
 
+if [[ -r "$SOURCE_ROOT/lib/core.sh" && -r "$SOURCE_ROOT/lib/presentation.sh" ]]; then
+  DSU_SCRIPT_DIR="$SOURCE_ROOT"
+  # shellcheck source=lib/core.sh
+  source "$SOURCE_ROOT/lib/core.sh"
+  # shellcheck source=lib/presentation.sh
+  source "$SOURCE_ROOT/lib/presentation.sh"
+  dsu_maintenance_options setup "$@"
+  FORCE="$DSU_MAINT_FORCE"
+  if (( DSU_MAINT_HELP )); then dsu_help setup; exit 0; fi
+  dsu_maintenance_header setup.sh "$INSTALL_DIR"
+else
 case "${1:-}" in
   --force) FORCE=1 ;;
   -h|--help)
@@ -35,6 +46,7 @@ HELP
     exit 2
     ;;
 esac
+fi
 
 # Only these are required to run the suite. Documentation and developer files
 # are intentionally optional so a minimal checkout/package can still install.

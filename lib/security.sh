@@ -1,51 +1,6 @@
 #!/usr/bin/env bash
 
-_dsu_audit_usage() {
-  cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}Defensive website security audit${DSU_RESET}
-
-${DSU_BOLD}Usage${DSU_RESET}
-  ${DSU_GREEN}check${DSU_RESET} <domain-or-url> --audit [options]
-
-The default audit is low-impact and non-destructive. It reviews DNS policy,
-certificate/TLS posture, HTTP-to-HTTPS behavior, security headers, cookies,
-CORS, HTTP methods, frontend signals and common accidental-exposure paths.
-
-It does not attempt credential attacks, destructive fuzzing, denial of service,
-authentication bypass or exploit execution.
-
-${DSU_BOLD}Options${DSU_RESET}
-  ${DSU_GREEN}--deep${DSU_RESET}          Add AXFR/recursion checks, broader TLS review and safe
-                  nmap HTTP/TLS scripts when available.
-  ${DSU_GREEN}--authorized${DSU_RESET}    Confirm authorization for active assessment.
-                  Required for --deep and --ports.
-  ${DSU_GREEN}--ports${DSU_RESET}         With --deep, add an nmap top-100 TCP port inventory.
-  ${DSU_GREEN}--no-paths${DSU_RESET}      Skip accidental sensitive-path probes.
-  ${DSU_GREEN}--port N${DSU_RESET}        HTTPS/TLS port ${DSU_GRAY}(default: 443)${DSU_RESET}.
-  ${DSU_GREEN}--strict${DSU_RESET}        Exit non-zero when MEDIUM-or-higher findings exist.
-  ${DSU_GREEN}--help, -h${DSU_RESET}      Show this help.
-
-${DSU_BOLD}Severity model${DSU_RESET}
-  ${DSU_RED}CRITICAL/HIGH${DSU_RESET}  Direct exposure, certificate identity failure, severe legacy crypto
-  ${DSU_YELLOW}MEDIUM${DSU_RESET}         Material hardening gap or risky server behavior
-  ${DSU_MAGENTA}LOW${DSU_RESET}            Defense-in-depth or information exposure
-  ${DSU_CYAN}INFO${DSU_RESET}           Context and recommended hardening
-
-${DSU_BOLD}Strict-mode exit codes${DSU_RESET}
-  ${DSU_GREEN}0${DSU_RESET}  Completed without MEDIUM+ strict findings
-  ${DSU_YELLOW}1${DSU_RESET}  Operational failure, or MEDIUM finding with --strict
-  ${DSU_RED}2${DSU_RESET}  Invalid usage, or HIGH/CRITICAL finding with --strict
-
-${DSU_BOLD}Examples${DSU_RESET}
-  ${DSU_CYAN}check example.com --audit${DSU_RESET}
-  ${DSU_CYAN}check https://example.com --audit${DSU_RESET}
-  ${DSU_CYAN}check example.com --audit --strict${DSU_RESET}
-  ${DSU_CYAN}check example.com --audit --deep --authorized${DSU_RESET}
-  ${DSU_CYAN}check example.com --audit --deep --ports --authorized${DSU_RESET}
-
-${DSU_YELLOW}Authorization:${DSU_RESET} only use deep or port scanning against systems you own or are explicitly authorized to assess.
-EOF_HELP
-}
+_dsu_audit_usage() { dsu_help check audit; }
 
 _dsu_audit_dns() {
   local host="$1" tmp pid cname cname_target cname_status dnskey ds caa mx spf dmarc spf_count dmarc_count
@@ -483,7 +438,7 @@ dsu_security_audit() {
   done
   if (( deep && ! authorized )); then
     dsu_bad "--deep/--ports require --authorized to reduce accidental active scanning"
-    dsu_info "Example: audit $input --deep --authorized"
+    dsu_info "Example: check $input --audit --deep --authorized"
     return 2
   fi
 

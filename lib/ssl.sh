@@ -1,139 +1,8 @@
 #!/usr/bin/env bash
 
-_dsu_ssl_usage() {
-  cat <<EOF_HELP
-${DSU_BOLD}${DSU_CYAN}SSL / TLS commands${DSU_RESET}
+_dsu_ssl_usage() { dsu_help ssl; }
 
-${DSU_BOLD}Usage${DSU_RESET}
-  ${DSU_GREEN}ssl${DSU_RESET} <command> [arguments]
-
-${DSU_GREEN}cert, c${DSU_RESET}             Certificate identity, validity, SANs, key and fingerprint
-${DSU_GREEN}quick, q${DSU_RESET}            Compact certificate health
-${DSU_GREEN}chain, ch${DSU_RESET}           Served certificate chain
-${DSU_GREEN}fetch, f${DSU_RESET}            Test a domain/SNI against a specific server IP
-${DSU_GREEN}versions, v${DSU_RESET}         TLS protocol-version support
-${DSU_GREEN}ciphers, ci${DSU_RESET}         Accepted cipher enumeration with sslscan/nmap
-${DSU_GREEN}scan, s${DSU_RESET}             Direct sslscan integration
-${DSU_GREEN}ocsp, o${DSU_RESET}             OCSP status
-${DSU_GREEN}crl${DSU_RESET}                 CRL revocation check
-${DSU_GREEN}ct, ctlogs${DSU_RESET}          Certificate Transparency names
-${DSU_GREEN}headers, h${DSU_RESET}          HTTPS security headers
-${DSU_GREEN}performance, perf${DSU_RESET}   TLS handshake benchmark
-${DSU_GREEN}fingerprint, fp${DSU_RESET}     SHA-256 fingerprint / pin comparison
-
-${DSU_BOLD}Certificate & key tools${DSU_RESET}
-${DSU_GREEN}decode, d${DSU_RESET}           Decode a certificate, CSR or private key
-${DSU_GREEN}match, m${DSU_RESET}            Verify cert/CSR/private-key public keys match
-${DSU_GREEN}new, n${DSU_RESET}              Create a private key + CSR + SANs
-${DSU_GREEN}pack, pk${DSU_RESET}            Create a PKCS#12/PFX bundle
-${DSU_GREEN}extract, x${DSU_RESET}          Extract certificate/CA/key material from PKCS#12/PFX
-
-${DSU_BOLD}Examples${DSU_RESET}
-  ${DSU_CYAN}ssl c example.com${DSU_RESET}
-  ${DSU_CYAN}ssl c example.com 8443${DSU_RESET}
-  ${DSU_CYAN}ssl fetch 203.0.113.10 example.com${DSU_RESET}
-  ${DSU_CYAN}ssl versions example.com${DSU_RESET}
-  ${DSU_CYAN}ssl match site.crt site.csr site.key${DSU_RESET}
-  ${DSU_CYAN}ssl new example.com --san www.example.com${DSU_RESET}
-
-Run ${DSU_CYAN}ssl <command> --help${DSU_RESET} for command-specific help.
-EOF_HELP
-}
-
-_dsu_ssl_leaf_help() {
-  local cmd="${1,,}"
-  case "$cmd" in
-    cert|certificate|c) cat <<EOF
-${DSU_BOLD}ssl cert${DSU_RESET} — inspect a live server certificate
-Usage: ssl cert <domain> [port]
-Aliases: ssl c, ssl certificate
-Shows subject, issuer, validity, SANs, signature/key details, SHA-256 fingerprint,
-CA verification result, hostname match and days remaining.
-EOF
-      ;;
-    quick|q) cat <<EOF
-${DSU_BOLD}ssl quick${DSU_RESET} — compact certificate health
-Usage: ssl quick <domain> [port]
-Alias: ssl q
-EOF
-      ;;
-    chain|ch) cat <<EOF
-${DSU_BOLD}ssl chain${DSU_RESET} — raw served chain and OpenSSL handshake output
-Usage: ssl chain <domain> [port]
-Alias: ssl ch
-EOF
-      ;;
-    fetch|f) cat <<EOF
-${DSU_BOLD}ssl fetch${DSU_RESET} — validate a domain/SNI against a chosen server IP
-Usage: ssl fetch <server-ip> <domain> [port]
-Alias: ssl f
-Useful before DNS changes or while testing a specific hosting node.
-EOF
-      ;;
-    versions|version|v) cat <<EOF
-${DSU_BOLD}ssl versions${DSU_RESET} — probe protocol support
-Usage: ssl versions <domain> [port]
-Alias: ssl v
-Probes the TLS/SSL version flags available in your local OpenSSL build.
-EOF
-      ;;
-    ciphers|cipher|ci) cat <<EOF
-${DSU_BOLD}ssl ciphers${DSU_RESET} — enumerate accepted cipher suites
-Usage: ssl ciphers <domain> [port]
-Alias: ssl ci
-Uses sslscan when available, otherwise nmap ssl-enum-ciphers.
-EOF
-      ;;
-    scan|s) cat <<EOF
-${DSU_BOLD}ssl scan${DSU_RESET} — run sslscan
-Usage: ssl scan <domain> [port]
-Alias: ssl s
-Requires the optional sslscan package.
-EOF
-      ;;
-    ocsp|o) printf '%b\n' "${DSU_BOLD}ssl ocsp${DSU_RESET} — Usage: ssl ocsp <domain> [port]  (alias: ssl o)" ;;
-    crl) printf '%b\n' "${DSU_BOLD}ssl crl${DSU_RESET} — Usage: ssl crl <domain> [port]" ;;
-    ct|ctlogs|transparency) printf '%b\n' "${DSU_BOLD}ssl ct${DSU_RESET} — Usage: ssl ct <domain>  (queries crt.sh)" ;;
-    headers|header|h) printf '%b\n' "${DSU_BOLD}ssl headers${DSU_RESET} — Usage: ssl headers <domain-or-url>  (alias: ssl h)" ;;
-    performance|perf|bench) printf '%b\n' "${DSU_BOLD}ssl performance${DSU_RESET} — Usage: ssl performance <domain> [port] [seconds]" ;;
-    fingerprint|pinning|pin|fp) cat <<EOF
-${DSU_BOLD}ssl fingerprint${DSU_RESET} — show or compare SHA-256 certificate fingerprint
-Usage: ssl fingerprint <domain> [expected-sha256] [port]
-Aliases: ssl fp, ssl pin
-EOF
-      ;;
-    decode|d) printf '%b\n' "${DSU_BOLD}ssl decode${DSU_RESET} — Usage: ssl decode <certificate.pem|request.csr|private.key>" ;;
-    match|modulus|m) cat <<EOF
-${DSU_BOLD}ssl match${DSU_RESET} — verify files contain the same public key
-Usage: ssl match <cert|csr|key> <cert|csr|key> [more files...]
-Alias: ssl m
-Uses SHA-256 of canonical DER public keys and supports RSA and EC.
-EOF
-      ;;
-    new|csr|n) cat <<EOF
-${DSU_BOLD}ssl new${DSU_RESET} — create a private key and CSR
-Usage: ssl new <common-name> [--san NAME] [--out PREFIX] [--rsa BITS|--ec CURVE] [--encrypted]
-Alias: ssl n
-Example: ssl n example.com --san www.example.com --rsa 4096 --out example
-EOF
-      ;;
-    pack|pfx-pack|pk) cat <<EOF
-${DSU_BOLD}ssl pack${DSU_RESET} — create a PKCS#12/PFX bundle
-Usage: ssl pack <certificate.pem> <private.key> [chain.pem] [output.pfx]
-Alias: ssl pk
-Prompts for a PFX password; DSU_PFX_PASSWORD can be used for automation.
-EOF
-      ;;
-    extract|pfx-extract|x) cat <<EOF
-${DSU_BOLD}ssl extract${DSU_RESET} — extract a PFX bundle
-Usage: ssl extract <bundle.pfx> [output-directory]
-Alias: ssl x
-The extracted private key is unencrypted and chmodded 0600.
-EOF
-      ;;
-    *) _dsu_ssl_usage ;;
-  esac
-}
+_dsu_ssl_leaf_help() { dsu_help ssl "${1:-}"; }
 
 _dsu_ssl_target() {
   dsu_target_parts "${1:-}" "${2:-}" 443
@@ -284,7 +153,7 @@ dsu_ssl_scan() {
   dsu_need sslscan sslscan || return
   IFS=$'\t' read -r host port < <(dsu_target_parts "$input" "${2:-}" 443) || { dsu_bad "Invalid host or port"; return 2; }
   target=$(dsu_socket_target "$host" "$port")
-  sslscan "$target"
+  if [[ "${_dsu_color_enabled:-0}" == 1 ]]; then sslscan "$target"; else sslscan --no-colour "$target"; fi
 }
 
 _dsu_extract_chain_files() {

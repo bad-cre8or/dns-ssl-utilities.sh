@@ -57,12 +57,34 @@ _dsu_icon() {
 
 dsu_disable_color() { _dsu_color_enabled=0; _dsu_apply_colors; }
 
+# Optional metadata travels alongside the original printable output. The UI can
+# use exact fields without scraping English; stripping metadata recovers plain
+# output if rendering fails. No metadata is emitted during ordinary/plain use.
+_dsu_ui_event() {
+  [[ "${DSU_UI_CAPTURE:-0}" == 1 ]] || return 0
+  local kind="$1" key="$2" value="$3" lines="$4" field joined no_newlines
+  joined="$key$value"; no_newlines="${joined//$'\n'/}"
+  lines=$((lines + ${#joined} - ${#no_newlines}))
+  printf '\036DSU\t%s\t' "$kind"
+  for field in "$key" "$value"; do
+    field="${field//\\/\\\\}"
+    field="${field//$'\t'/\\t}"
+    field="${field//$'\n'/\\n}"
+    field="${field//$'\r'/\\r}"
+    field="${field//$'\036'/\\x1e}"
+    printf '%s\t' "$field"
+  done
+  printf '%d\n' "$lines"
+}
+
 dsu_banner() {
+  _dsu_ui_event banner "$DSU_NAME" 'DNS, TLS, domains, mail, hosting and security diagnostics' 3
   printf '\n%s%s%s%s\n' "$DSU_BOLD" "$DSU_CYAN" "$DSU_NAME" "$DSU_RESET"
   printf '%s%s%s\n' "$DSU_GRAY" 'DNS, TLS, domains, mail, hosting and security diagnostics' "$DSU_RESET"
 }
 
 dsu_section() {
+  _dsu_ui_event section "$1" '' 2
   # Preserve compact/plain output for logs and ASCII consumers.
   if (( ! _dsu_color_enabled )) || [[ "${DSU_ASCII:-0}" == 1 ]]; then
     printf '\n%s%s%s %s%s\n' "$DSU_BOLD" "$DSU_BLUE" "$(_dsu_icon '◆' '==')" "$1" "$DSU_RESET"
@@ -88,6 +110,7 @@ dsu_section() {
 }
 
 dsu_subsection() {
+  _dsu_ui_event section "$1" '' 2
   printf '\n%s%s%s%s\n' "$DSU_BOLD" "$DSU_MAGENTA" "$1" "$DSU_RESET"
 }
 
@@ -95,6 +118,9 @@ dsu_subsection() {
 # Never interpret diagnostic text as a printf format or an escape sequence.
 _dsu_message() {
   local color="$1" unicode="$2" ascii="$3" text="$4" label
+  local status
+  case "$ascii" in '[OK]') status=OK ;; '[!]') status='!' ;; '[X]') status=X ;; *) status=i ;; esac
+  _dsu_ui_event status "$status" "$text" 1
   printf '  %s%s%s  ' "$color" "$(_dsu_icon "$unicode" "$ascii")" "$DSU_RESET"
   label="${text%%: *}"
   if (( _dsu_color_enabled )) && [[ "$text" == *': '* && ${#label} -le 28 && "$label" != *$'\033'* ]]; then
@@ -108,10 +134,11 @@ dsu_ok()   { _dsu_message "$DSU_GREEN"  '✔' '[OK]' "$*"; }
 dsu_warn() { _dsu_message "$DSU_YELLOW" '⚠' '[!]'  "$*"; }
 dsu_bad()  { _dsu_message "$DSU_RED"    '✘' '[X]'  "$*"; }
 dsu_info() { _dsu_message "$DSU_CYAN"   '•' '[i]'  "$*"; }
-dsu_dim()  { printf '  %s%s%s\n' "$DSU_GRAY" "$*" "$DSU_RESET"; }
+dsu_dim()  { _dsu_ui_event text '' "$*" 1; printf '  %s%s%s\n' "$DSU_GRAY" "$*" "$DSU_RESET"; }
 
 dsu_keyval() {
   local key="$1"; shift
+  _dsu_ui_event field "$key" "$*" 1
   if (( _dsu_color_enabled )) && [[ "${DSU_ASCII:-0}" != 1 ]]; then
     printf '  %s%-18s%s │ %s%s%s\n' "$DSU_GRAY" "$key" "$DSU_RULE" "$DSU_WHITE" "$*" "$DSU_RESET"
   else
@@ -119,7 +146,7 @@ dsu_keyval() {
   fi
 }
 
-dsu_die() { dsu_bad "$*" >&2; return 1; }
+dsu_die() { DSU_UI_CAPTURE=0 dsu_bad "$*" >&2; return 1; }
 
 dsu_has() { command -v "$1" >/dev/null 2>&1; }
 
@@ -367,11 +394,13 @@ dsu_finding() {
     LOW)      ((DSU_FIND_LOW+=1));      label="LOW";      color="$DSU_MAGENTA"; icon="$(_dsu_icon '△' '[-]')" ;;
     *)        ((DSU_FIND_INFO+=1));     label="INFO";     color="$DSU_CYAN"; icon="$(_dsu_icon '•' '[i]')" ;;
   esac
+  _dsu_ui_event finding "$label" "$*" 1
   printf '  %s%s %-8s%s %s\n' "$color" "$icon" "$label" "$DSU_RESET" "$*"
 }
 
 dsu_finding_summary() {
   dsu_section "Audit summary"
+  _dsu_ui_event summary "$DSU_FIND_CRITICAL $DSU_FIND_HIGH $DSU_FIND_MEDIUM $DSU_FIND_LOW $DSU_FIND_INFO" '' 1
   printf '  %sCritical%s %d   %sHigh%s %d   %sMedium%s %d   %sLow%s %d   %sInfo%s %d\n' \
     "$DSU_RED" "$DSU_RESET" "$DSU_FIND_CRITICAL" \
     "$DSU_RED" "$DSU_RESET" "$DSU_FIND_HIGH" \

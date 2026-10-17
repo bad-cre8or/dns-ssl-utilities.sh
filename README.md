@@ -820,13 +820,37 @@ Panels sit side by side at 110 columns and above, and stack on narrower
 terminals. The report uses up to 124 columns. Long SPF policies, certificate
 details, IPv6 addresses, and URLs wrap without being truncated.
 
+Help, DNS utilities, SSL commands, dependency diagnostics and audits use the same
+headers, panels, label alignment and status markers. Help is kept in one command
+catalogue, including canonical names, aliases, arguments, options and examples.
+
+```bash
+check --help
+check example.com --dns --help
+check example.com --audit --help
+ssl --help
+ssl cert --help
+```
+
 The layout presents the same checks and original statuses; it adds no probes
-and changes no WHOIS/registrar parsing or timeouts. It renders once the original
-overview has completed. Utility modes such as `--whois`, `--dns`, and `--audit`
-keep their existing output.
+and changes no WHOIS/registrar parsing or timeouts. Formatted reports render
+after the command completes, while password prompts remain interactive. Native
+OpenSSL detail, dig traces, scanner output and benchmarks stream beneath a
+standard command header, preserving their original output.
 
 The Tokyo Night palette supports true-color and 256-color terminals. Your
 terminal controls the background and font. No additional packages are needed.
+
+![Shared help layout](docs/help-preview.png)
+
+![SSL command help using the same layout](docs/ssl-help-preview.png)
+
+Maintenance commands also support the shared help and output options:
+
+```bash
+./setup.sh --help
+./update.sh --help
+```
 
 ![Structured command report, rendered with sample responses](docs/terminal-preview.png)
 
@@ -839,10 +863,11 @@ Disable it with:
 NO_COLOR=1 check example.com
 ```
 
-For the original line-by-line overview:
+For simple line-by-line output from any command:
 
 ```bash
 check example.com --plain
+ssl cert example.com --plain
 ```
 
 For that layout with plain ASCII headings and status markers:
