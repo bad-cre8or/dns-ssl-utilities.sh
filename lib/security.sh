@@ -8,15 +8,24 @@ _dsu_audit_dns() {
   tmp=$(dsu_tmpdir) || return 1
 
   local -a pids=()
-  (_dsu_dig_lines CNAME "$host") >"$tmp/cname" & pids+=("$!")
-  (_dsu_dig_lines DNSKEY "$host") >"$tmp/dnskey" & pids+=("$!")
-  (_dsu_dig_lines DS "$host") >"$tmp/ds" & pids+=("$!")
-  (_dsu_dig_lines CAA "$host") >"$tmp/caa" & pids+=("$!")
-  (_dsu_dig_lines MX "$host") >"$tmp/mx" & pids+=("$!")
-  (_dsu_dig_lines TXT "$host") >"$tmp/txt" & pids+=("$!")
-  (_dsu_dig_lines TXT "_dmarc.$host") >"$tmp/dmarc" & pids+=("$!")
+  (_dsu_dns_capture CNAME "$host" "$tmp/cname") & pids+=("$!")
+  (_dsu_dns_capture DNSKEY "$host" "$tmp/dnskey") & pids+=("$!")
+  (_dsu_dns_capture DS "$host" "$tmp/ds") & pids+=("$!")
+  (_dsu_dns_capture CAA "$host" "$tmp/caa") & pids+=("$!")
+  (_dsu_dns_capture MX "$host" "$tmp/mx") & pids+=("$!")
+  (_dsu_dns_capture TXT "$host" "$tmp/txt") & pids+=("$!")
+  (_dsu_dns_capture TXT "_dmarc.$host" "$tmp/dmarc") & pids+=("$!")
   (dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" A "$host" +dnssec 2>/dev/null || true) >"$tmp/dnssec" & pids+=("$!")
   for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+
+  local query incomplete=0
+  for query in cname dnskey ds caa mx txt dmarc; do
+    if _dsu_dns_failed "$tmp/$query"; then
+      dsu_finding MEDIUM "DNS $query lookup failed; policy state is unknown"
+      incomplete=1
+    fi
+  done
+  if (( incomplete )); then dsu_cleanup_dir "$tmp"; return 0; fi
 
   cname=$(head -1 "$tmp/cname" 2>/dev/null || true)
   dnskey=$(cat "$tmp/dnskey" 2>/dev/null || true)
@@ -32,9 +41,9 @@ _dsu_audit_dns() {
     cname_target="${cname%.}"
     local p1 p2 p3 p4 target_records
     (dig +time="$DSU_DNS_TIMEOUT" +tries="$DSU_DNS_TRIES" A "$cname_target" +noall +comments 2>/dev/null || true) >"$tmp/cname.status" & p1=$!
-    (_dsu_dig_lines A "$cname_target") >"$tmp/cname.a" & p2=$!
-    (_dsu_dig_lines AAAA "$cname_target") >"$tmp/cname.aaaa" & p3=$!
-    (_dsu_dig_lines CNAME "$cname_target") >"$tmp/cname.cname" & p4=$!
+    (_dsu_dns_capture A "$cname_target" "$tmp/cname.a") & p2=$!
+    (_dsu_dns_capture AAAA "$cname_target" "$tmp/cname.aaaa") & p3=$!
+    (_dsu_dns_capture CNAME "$cname_target" "$tmp/cname.cname") & p4=$!
     wait "$p1" 2>/dev/null || true; wait "$p2" 2>/dev/null || true; wait "$p3" 2>/dev/null || true; wait "$p4" 2>/dev/null || true
     cname_status=$(cat "$tmp/cname.status" 2>/dev/null || true)
     target_records=$(cat "$tmp/cname.a" "$tmp/cname.aaaa" "$tmp/cname.cname" 2>/dev/null || true)
@@ -54,7 +63,7 @@ _dsu_audit_dns() {
     dsu_finding LOW "DNSSEC is not published"
   fi
 
-  [[ -n "$caa" ]] && dsu_finding INFO "CAA restricts certificate issuance: $(printf '%s' "$caa" | paste -sd ', ' -)" || dsu_finding LOW "CAA is absent; any publicly trusted CA permitted by policy may issue"
+  [[ -n "$caa" ]] && dsu_finding INFO "CAA records published: $(printf '%s' "$caa" | paste -sd ', ' -)" || dsu_finding LOW "CAA is absent; any publicly trusted CA permitted by policy may issue"
 
   if [[ -n "$mx" ]]; then
     [[ -n "$spf" ]] || dsu_finding MEDIUM "Domain has MX records but no SPF policy was found"
@@ -65,7 +74,7 @@ _dsu_audit_dns() {
       [[ -n "${mx_target:-}" ]] || continue
       mx_target="${mx_target%.}"
       mx_targets+=("$mx_target"); ((idx+=1))
-      (_dsu_dig_lines CNAME "$mx_target") >"$tmp/mx_cname.$idx" & mx_pids+=("$!")
+      (_dsu_dns_capture CNAME "$mx_target" "$tmp/mx_cname.$idx") & mx_pids+=("$!")
     done <<< "$mx"
     for pid in "${mx_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
     idx=0
@@ -121,7 +130,8 @@ _dsu_audit_tls() {
       proto_flags+=("$flag")
       proto_labels+=("$label")
       ((proto_i+=1))
-      (_dsu_tls_probe "$flag" "$host" "$port" && printf 'yes') >"$tmp/proto.$proto_i" &
+      (if _dsu_tls_probe "$flag" "$host" "$port"; then printf yes;
+       elif (( $? == 2 )); then printf unknown; fi) >"$tmp/proto.$proto_i" &
       proto_pids+=("$!")
     fi
   done <<'VERSIONS'
@@ -141,7 +151,9 @@ VERSIONS
   for flag in "${proto_flags[@]}"; do
     label="${proto_labels[$proto_i]}"
     ((proto_i+=1))
-    if [[ -s "$tmp/proto.$proto_i" ]]; then
+    if [[ "$(<"$tmp/proto.$proto_i")" == unknown ]]; then
+      dsu_finding MEDIUM "$label probe failed; protocol support is unknown"
+    elif [[ -s "$tmp/proto.$proto_i" ]]; then
       case "$flag" in
         -ssl3) dsu_finding HIGH "$label is accepted" ;;
         -tls1|-tls1_1) dsu_finding MEDIUM "$label is accepted; disable legacy TLS where possible" ;;
@@ -160,7 +172,11 @@ VERSIONS
   if (( deep )); then
     if dsu_has sslscan; then
       local scan weak
-      scan=$(sslscan --no-colour "$target" 2>/dev/null || true)
+      if ! scan=$(sslscan --no-colour "$target" 2>/dev/null) || [[ -z "$scan" ]]; then
+        dsu_finding MEDIUM "sslscan failed; accepted cipher suites are unknown"
+        dsu_cleanup_dir "$tmp"
+        return 0
+      fi
       weak=$(printf '%s\n' "$scan" | grep -iE 'Accepted.*(NULL|RC4|3DES|DES-CBC|EXP|anon|MD5)' | head -10 || true)
       if [[ -n "$weak" ]]; then
         dsu_finding HIGH "Weak/legacy cipher suites were accepted"
@@ -246,7 +262,9 @@ _dsu_audit_http_behavior() {
   if [[ "$location" == https://* ]]; then dsu_finding INFO "Plain HTTP redirects to HTTPS ($code → $location)"; else dsu_finding MEDIUM "Plain HTTP does not clearly redirect to HTTPS${location:+ (Location: $location)}"; fi
 
   trace=$(cat "$tmp/trace" 2>/dev/null || printf '000')
-  [[ "$trace" == 200 ]] && dsu_finding MEDIUM "HTTP TRACE is enabled (HTTP 200)" || dsu_finding INFO "HTTP TRACE not accepted (status $trace)"
+  if [[ "$trace" == 000 || -z "$trace" ]]; then dsu_finding MEDIUM "HTTP TRACE request failed; acceptance is unknown";
+  elif [[ "$trace" == 200 ]]; then dsu_finding MEDIUM "HTTP TRACE is enabled (HTTP 200)";
+  else dsu_finding INFO "HTTP TRACE not accepted (status $trace)"; fi
 
   options=$(cat "$tmp/options" 2>/dev/null || true)
   allow=$(dsu_header_value "$options" allow)
@@ -260,7 +278,9 @@ _dsu_audit_http_behavior() {
   cors_headers=$(cat "$tmp/cors" 2>/dev/null || true)
   acao=$(dsu_header_value "$cors_headers" access-control-allow-origin)
   acac=$(dsu_header_value "$cors_headers" access-control-allow-credentials)
-  if [[ "$acao" == 'https://dns-ssl-utilities.invalid' && "${acac,,}" == true ]]; then
+  if [[ -z "$cors_headers" ]]; then
+    dsu_finding MEDIUM "CORS request failed; origin policy is unknown"
+  elif [[ "$acao" == 'https://dns-ssl-utilities.invalid' && "${acac,,}" == true ]]; then
     dsu_finding HIGH "CORS reflects an arbitrary Origin and allows credentials"
   elif [[ "$acao" == '*' && "${acac,,}" == true ]]; then
     dsu_finding MEDIUM "CORS returns wildcard ACAO with credentials; browsers reject this combination, but configuration is inconsistent"
@@ -284,6 +304,8 @@ _dsu_audit_http_behavior() {
       fi
       [[ ! "${cookie,,}" =~ \;[[:space:]]*samesite= ]] && dsu_finding LOW "Cookie '$name' has no SameSite attribute"
     done <<< "$cookies"
+  elif [[ ! -s "$tmp/root_headers" ]]; then
+    dsu_finding MEDIUM "Cookie request failed; cookie attributes are unknown"
   else
     dsu_finding INFO "No Set-Cookie headers observed on /"
   fi
@@ -298,7 +320,9 @@ _dsu_audit_http_behavior() {
   fi
 
   code=$(cat "$tmp/securitytxt" 2>/dev/null || printf '000')
-  [[ "$code" == 200 ]] && dsu_finding INFO "security.txt is published" || dsu_finding INFO "security.txt not found (status $code)"
+  if [[ "$code" == 000 || -z "$code" ]]; then dsu_finding INFO "security.txt request failed; presence is unknown";
+  elif [[ "$code" == 200 ]]; then dsu_finding INFO "security.txt is published";
+  else dsu_finding INFO "security.txt not found (status $code)"; fi
   dsu_cleanup_dir "$tmp"
 }
 _dsu_probe_path_result() {
@@ -309,7 +333,9 @@ _dsu_probe_path_result() {
     -o "$tmp" -w '%{http_code}' "$base$path" 2>/dev/null)
   rc=$?
   if [[ "$raw_status" =~ ([0-9]{3})$ ]]; then status="${BASH_REMATCH[1]}"; elif (( rc != 0 )); then status=000; else status="${raw_status:-000}"; fi
-  if [[ "$status" == 200 || "$status" == 206 ]]; then
+  if (( rc != 0 )) && [[ "$status" != 200 && "$status" != 206 ]]; then
+    printf 'MEDIUM\t%s\n' "Exposure probe failed at $path; exposure is unknown"
+  elif [[ "$status" == 200 || "$status" == 206 ]]; then
     if [[ -n "$marker" ]] && grep -Eqi "$marker" "$tmp" 2>/dev/null; then
       printf '%s\t%s\n' "$severity" "$description exposed at $path"
     elif [[ "$path" == *.zip || "$path" == *.tar.gz || "$path" == *.sql ]]; then
@@ -318,6 +344,9 @@ _dsu_probe_path_result() {
     fi
   elif [[ "$status" == 403 ]]; then
     printf 'INFO\t%s\n' "$path exists or is filtered (403); access was denied"
+  fi
+  if (( rc != 0 )) && [[ "$status" == 200 || "$status" == 206 ]]; then
+    printf 'MEDIUM\t%s\n' "Exposure probe incomplete at $path; unobserved content is unknown"
   fi
   rm -f "$tmp"
 }
@@ -412,10 +441,14 @@ _dsu_audit_nmap() {
   dsu_section "Deep network/TLS inventory"
   if ! dsu_has nmap; then dsu_finding INFO "nmap not installed; safe NSE checks skipped"; return 0; fi
   dsu_info "Running safe web/TLS NSE scripts on ports 80 and $port"
-  nmap -Pn -T3 -p "80,$port" --script 'ssl-cert,ssl-enum-ciphers,http-security-headers,http-methods' "$host" 2>/dev/null | sed 's/^/  /'
+  if ! nmap -Pn -T3 -p "80,$port" --script 'ssl-cert,ssl-enum-ciphers,http-security-headers,http-methods' "$host" 2>/dev/null | sed 's/^/  /'; then
+    dsu_finding MEDIUM "nmap web/TLS inventory failed; inventory is incomplete"
+  fi
   if (( ports )); then
     dsu_info "Running authorized top-100 TCP port inventory"
-    nmap -Pn -T3 --top-ports 100 --open "$host" 2>/dev/null | sed 's/^/  /'
+    if ! nmap -Pn -T3 --top-ports 100 --open "$host" 2>/dev/null | sed 's/^/  /'; then
+      dsu_finding MEDIUM "nmap TCP inventory failed; open ports are unknown"
+    fi
   fi
 }
 

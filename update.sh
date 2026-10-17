@@ -14,7 +14,7 @@ elif [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
   printf 'Usage: ./update.sh\nRun from a Git checkout to pull and reinstall.\n'
   exit 0
 fi
-if [[ ! -d "$ROOT/.git" ]]; then
+if [[ ! -e "$ROOT/.git" ]] || ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   printf 'This copy is not a Git checkout. Replace it with a newer release/archive instead.\n' >&2
   exit 1
 fi

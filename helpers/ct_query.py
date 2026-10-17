@@ -14,6 +14,8 @@ def main() -> int:
     ap.add_argument("domain")
     ap.add_argument("--limit", type=int, default=40)
     ns = ap.parse_args()
+    if ns.limit < 1:
+        ap.error('--limit must be positive')
     url = f"https://crt.sh/?q={quote(ns.domain)}&output=json"
     req = Request(url, headers={"User-Agent": "dns-ssl-utilities/2.0"})
     try:
@@ -23,13 +25,16 @@ def main() -> int:
         print(f"CT query failed: {exc}", file=sys.stderr)
         return 1
 
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        print('CT query failed: expected a list of certificate records', file=sys.stderr)
+        return 1
     seen: dict[str, tuple[str, str]] = {}
     for row in rows:
         issuer = str(row.get("issuer_name", "")).replace("\n", " ")
         not_after = str(row.get("not_after", ""))
         for name in str(row.get("name_value", "")).splitlines():
             name = name.strip().lower()
-            if name:
+            if name and (name not in seen or not_after > seen[name][0]):
                 seen[name] = (not_after, issuer)
 
     if not seen:

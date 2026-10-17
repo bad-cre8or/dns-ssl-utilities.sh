@@ -151,12 +151,18 @@ _dsu_site_print_mail_policy() {
 }
 
 _dsu_site_policy_query() {
-  local type="$1" name="$2" status_file="$3" output='' rc=0
-  output=$(dig +time="$DSU_CHECK_POLICY_DNS_TIMEOUT" +tries=2 +short "$type" "$name" 2>/dev/null) || rc=$?
+  local type="$1" name="$2" status_file="$3" output='' rc=0 status
+  output=$(dig +time="$DSU_CHECK_POLICY_DNS_TIMEOUT" +tries=2 +short +comments "$type" "$name" 2>/dev/null) || rc=$?
+  status=$(sed -nE 's/.*status:[[:space:]]*([A-Z]+),.*/\1/p' <<<"$output" | head -1)
+  case "$status" in ''|NOERROR|NXDOMAIN) ;; *) rc=1 ;; esac
+  output=$(sed '/^;;/d; /^[[:space:]]*$/d' <<<"$output")
   if (( rc != 0 )) || [[ -z "$output" ]]; then
     if [[ -n "$DSU_FALLBACK_RESOLVER" ]]; then
       rc=0
-      output=$(dig @"$DSU_FALLBACK_RESOLVER" +time="$DSU_CHECK_POLICY_DNS_TIMEOUT" +tries=2 +short "$type" "$name" 2>/dev/null) || rc=$?
+      output=$(dig @"$DSU_FALLBACK_RESOLVER" +time="$DSU_CHECK_POLICY_DNS_TIMEOUT" +tries=2 +short +comments "$type" "$name" 2>/dev/null) || rc=$?
+      status=$(sed -nE 's/.*status:[[:space:]]*([A-Z]+),.*/\1/p' <<<"$output" | head -1)
+      case "$status" in ''|NOERROR|NXDOMAIN) ;; *) rc=1 ;; esac
+      output=$(sed '/^;;/d; /^[[:space:]]*$/d' <<<"$output")
     fi
   fi
   if (( rc != 0 )); then
@@ -246,16 +252,16 @@ dsu_site_check() {
   # Fast path: the independent network probes all launch together. There is no
   # banner, target echo, spinner, redirect crawl or audit work in this command.
   local pid_a pid_aaaa pid_cname pid_www_cname pid_ns pid_mx pid_txt pid_dmarc pid_caa pid_dnskey pid_dnssec
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines A "$host") >"$tmp/a" & pid_a=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines AAAA "$host") >"$tmp/aaaa" & pid_aaaa=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines CNAME "$host") >"$tmp/cname" & pid_cname=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines CNAME "www.$host") >"$tmp/www_cname" & pid_www_cname=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines NS "$host") >"$tmp/ns" & pid_ns=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines MX "$host") >"$tmp/mx" & pid_mx=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dns_capture A "$host" "$tmp/a") & pid_a=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dns_capture AAAA "$host" "$tmp/aaaa") & pid_aaaa=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dns_capture CNAME "$host" "$tmp/cname") & pid_cname=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dns_capture CNAME "www.$host" "$tmp/www_cname") & pid_www_cname=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dns_capture NS "$host" "$tmp/ns") & pid_ns=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dns_capture MX "$host" "$tmp/mx") & pid_mx=$!
   (_dsu_site_policy_query TXT "$host" "$tmp/txt.status" || true) >"$tmp/txt" & pid_txt=$!
   (_dsu_site_policy_query TXT "_dmarc.$host" "$tmp/dmarc.status" || true) >"$tmp/dmarc" & pid_dmarc=$!
   (_dsu_site_policy_query CAA "$host" "$tmp/caa.status" || true) >"$tmp/caa" & pid_caa=$!
-  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dig_lines DNSKEY "$host") >"$tmp/dnskey" & pid_dnskey=$!
+  (DSU_DNS_TIMEOUT="$DSU_CHECK_DNS_TIMEOUT" _dsu_dns_capture DNSKEY "$host" "$tmp/dnskey") & pid_dnskey=$!
   (dig +time="$DSU_CHECK_DNS_TIMEOUT" +tries=1 A "$host" +dnssec 2>/dev/null || true) >"$tmp/dnssec" & pid_dnssec=$!
 
   local pid_whois pid_http pid_https
@@ -314,22 +320,31 @@ dsu_site_check() {
   dsu_section "DNS"
   if [[ -n "$a" ]]; then
     _dsu_site_print_records ok "A" "$a"
+  elif _dsu_dns_failed "$tmp/a"; then
+    dsu_bad "A lookup failed; record presence is unknown"
   else
     dsu_warn "No A record"
   fi
   if [[ -n "$aaaa" ]]; then
     _dsu_site_print_records ok "AAAA" "$aaaa"
+  elif _dsu_dns_failed "$tmp/aaaa"; then
+    dsu_bad "AAAA lookup failed; record presence is unknown"
   else
     dsu_info "No AAAA record"
   fi
   [[ -n "$cname" ]] && _dsu_site_print_records info "CNAME" "$cname"
+  _dsu_dns_failed "$tmp/cname" && dsu_bad "CNAME lookup failed; record presence is unknown"
   if [[ -n "$ns" ]]; then
     _dsu_site_print_records ok "NS" "$ns"
+  elif _dsu_dns_failed "$tmp/ns"; then
+    dsu_bad "NS lookup failed; record presence is unknown"
   else
     dsu_bad "No NS records returned"
   fi
   if grep -q 'flags:.* ad[; ]' "$tmp/dnssec" 2>/dev/null; then
     dsu_ok "DNSSEC validated"
+  elif _dsu_dns_failed "$tmp/dnskey" || grep -qE 'status: (SERVFAIL|REFUSED|FORMERR)' "$tmp/dnssec" || [[ ! -s "$tmp/dnssec" ]]; then
+    dsu_bad "DNSSEC lookup failed; validation state is unknown"
   elif [[ -s "$tmp/dnskey" ]]; then
     dsu_warn "DNSSEC signed, validation not observed"
   else
@@ -339,6 +354,8 @@ dsu_site_check() {
   dsu_section "MAIL & SECURITY POLICY"
   if [[ -n "$mx" ]]; then
     _dsu_site_print_records ok "MX" "$mx"
+  elif _dsu_dns_failed "$tmp/mx"; then
+    dsu_bad "MX lookup failed; record presence is unknown"
   else
     dsu_info "No MX records"
   fi
@@ -429,10 +446,14 @@ dsu_site_check() {
   powered=$(dsu_header_value "$https_headers" x-powered-by)
   hsts=$(dsu_header_value "$https_headers" strict-transport-security)
   csp=$(dsu_header_value "$https_headers" content-security-policy)
-  [[ -n "$hsts" ]] && dsu_ok "HSTS: $hsts" || dsu_warn "HSTS missing"
-  [[ -n "$csp" ]] && dsu_ok "Content-Security-Policy present" || dsu_warn "Content-Security-Policy missing"
-  [[ -n "$server" ]] && dsu_warn "Server header exposed: $server" || dsu_ok "Server header not exposed"
-  [[ -n "$powered" ]] && dsu_warn "X-Powered-By exposed: $powered" || dsu_ok "X-Powered-By not exposed"
+  if [[ "$https_code" == 000 || -z "$https_headers" ]]; then
+    dsu_bad "HTTPS headers unavailable; header policy and exposure are unknown"
+  else
+    [[ -n "$hsts" ]] && dsu_ok "HSTS: $hsts" || dsu_warn "HSTS missing"
+    [[ -n "$csp" ]] && dsu_ok "Content-Security-Policy present" || dsu_warn "Content-Security-Policy missing"
+    [[ -n "$server" ]] && dsu_warn "Server header exposed: $server" || dsu_ok "Server header not exposed"
+    [[ -n "$powered" ]] && dsu_warn "X-Powered-By exposed: $powered" || dsu_ok "X-Powered-By not exposed"
+  fi
 
   if (( ! no_rdns )); then
     for pid in "${ptr_pids[@]}"; do wait "$pid" 2>/dev/null || true; done

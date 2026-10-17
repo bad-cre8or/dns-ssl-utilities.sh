@@ -89,6 +89,7 @@ if [[ "$(canonical_path "$SOURCE_ROOT")" != "$(canonical_path "$INSTALL_DIR")" ]
     update.sh
     README.md
     LICENSE
+    docs
     tests
   )
   for rel in "${optional_paths[@]}"; do

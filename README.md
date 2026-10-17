@@ -1064,6 +1064,11 @@ If your installation includes the updater:
 
 The installer is designed to be safe to rerun.
 
+Run the updater in the original clone or a Git worktree. The installed copy
+intentionally contains no Git metadata; refresh it by running `setup.sh` from
+the updated checkout. Release/archive installations must be replaced with a
+newer archive before rerunning setup.
+
 ---
 
 # 🧪 Testing
@@ -1091,6 +1096,11 @@ The test suite covers areas such as:
 * audit authorization controls
 * installation behavior
 * performance regressions
+
+The [project audit](docs/audit.md) records the reliability fixes in 2.2.3 and
+their regression coverage. Failed DNS/HTTP checks now report unknown states
+instead of implying that a policy is absent or a probe passed. Fingerprint
+mismatches return `1`; malformed expected SHA-256 fingerprints return `2`.
 
 ---
 
