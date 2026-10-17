@@ -319,6 +319,21 @@ dsu_fetch_leaf_cert() {
   [[ -s "$out" ]]
 }
 
+dsu_cert_matches_host() {
+  local cert="$1" host="$2" flag expected result
+  # OpenSSL x509 can return zero even when it prints "does NOT match".
+  # Require its explicit positive result, independently of CA/expiry checks.
+  if dsu_is_ip "$host"; then
+    flag=-checkip
+    expected="IP $host does match certificate"
+  else
+    flag=-checkhost
+    expected="Hostname $host does match certificate"
+  fi
+  result=$(LC_ALL=C openssl x509 -in "$cert" -noout "$flag" "$host" 2>/dev/null) || return 1
+  [[ "$result" == "$expected" ]]
+}
+
 dsu_openssl_connection() {
   local host="$1" port="${2:-443}" target
   target=$(dsu_socket_target "$host" "$port")

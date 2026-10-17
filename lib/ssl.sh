@@ -173,7 +173,7 @@ dsu_ssl_cert() {
   [[ -n "$san" ]] && dsu_keyval "SANs" "$san"
 
   if [[ "$verify" == 0*'(ok)'* || "$verify" == 0* ]]; then dsu_ok "CA chain verification: $verify"; else dsu_warn "CA chain verification: ${verify:-unknown}"; fi
-  if openssl x509 -in "$tmp/leaf.pem" -noout -checkhost "$host" >/dev/null 2>&1; then dsu_ok "Hostname matches certificate"; else dsu_bad "Hostname does not match certificate"; fi
+  if dsu_cert_matches_host "$tmp/leaf.pem" "$host"; then dsu_ok "Hostname matches certificate"; else dsu_bad "Hostname does not match certificate"; fi
   if days=$(dsu_days_until "$end" 2>/dev/null); then
     if (( days < 0 )); then dsu_bad "Certificate expired $((-days)) days ago"; elif (( days < 14 )); then dsu_bad "Certificate expires in $days days"; elif (( days < 30 )); then dsu_warn "Certificate expires in $days days"; else dsu_ok "Certificate valid for $days more days"; fi
   fi
@@ -224,7 +224,7 @@ dsu_ssl_fetch() {
   end=$(openssl x509 -in "$tmp/leaf.pem" -noout -enddate | cut -d= -f2-)
   dsu_keyval "Expires" "$end"
   dsu_keyval "OpenSSL verify" "${verify:-unknown}"
-  if openssl x509 -in "$tmp/leaf.pem" -noout -checkhost "$domain" >/dev/null 2>&1; then dsu_ok "Certificate matches $domain"; else dsu_bad "Certificate does not match $domain"; fi
+  if dsu_cert_matches_host "$tmp/leaf.pem" "$domain"; then dsu_ok "Certificate matches $domain"; else dsu_bad "Certificate does not match $domain"; fi
   authority=$(dsu_url_authority "$domain" "$port" 443)
   resolve_ip="$ip"; [[ "$ip" == *:* ]] && resolve_ip="[$ip]"
   if curl -fsSI --connect-timeout "$DSU_CONNECT_TIMEOUT" --max-time "$DSU_MAX_TIME" --resolve "$domain:$port:$resolve_ip" "https://$authority/" >/dev/null 2>&1; then dsu_ok "curl CA + hostname validation passed against $ip"; else dsu_warn "curl validation/request failed against $ip"; fi
@@ -442,16 +442,26 @@ dsu_ssl_decode() {
   esac
 }
 
-_dsu_public_key_hash() {
-  local file="$1" kind
-  kind=$(_dsu_file_kind "$file")
+_dsu_public_key_hash() (
+  # DER is binary, so use temporary files rather than shell variables.
+  # The subshell confines cleanup traps to this one extraction attempt.
+  local file="$1" kind="${2:-}" tmp digest
+  [[ -n "$kind" ]] || kind=$(_dsu_file_kind "$file")
+  case "$kind" in cert|csr|key) ;; *) return 1 ;; esac
+  tmp=$(dsu_tmpdir) || return 1
+  trap 'dsu_cleanup_dir "$tmp"' EXIT
   case "$kind" in
-    cert) openssl x509 -in "$file" -pubkey -noout 2>/dev/null ;;
-    csr) openssl req -in "$file" -pubkey -noout 2>/dev/null ;;
-    key) openssl pkey -in "$file" -pubout 2>/dev/null ;;
-    *) return 1 ;;
-  esac | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 | awk '{print $NF}'
-}
+    cert) openssl x509 -in "$file" -pubkey -noout >"$tmp/public.pem" 2>/dev/null || return 1 ;;
+    csr) openssl req -in "$file" -pubkey -noout >"$tmp/public.pem" 2>/dev/null || return 1 ;;
+    key) openssl pkey -in "$file" -pubout >"$tmp/public.pem" 2>/dev/null || return 1 ;;
+  esac
+  openssl pkey -pubin -in "$tmp/public.pem" -outform DER -out "$tmp/public.der" 2>/dev/null || return 1
+  [[ -s "$tmp/public.der" ]] || return 1
+  digest=$(openssl dgst -sha256 <"$tmp/public.der" 2>/dev/null) || return 1
+  digest="${digest##* }"
+  [[ "$digest" =~ ^[[:xdigit:]]{64}$ ]] || return 1
+  printf '%s\n' "$digest"
+)
 
 dsu_ssl_match() {
   (( $# >= 2 )) || { dsu_bad "Usage: ssl match <cert|csr|key> <cert|csr|key> [more files...]"; return 2; }
@@ -461,8 +471,9 @@ dsu_ssl_match() {
   for file in "$@"; do
     [[ -f "$file" ]] || { dsu_bad "File not found: $file"; mismatch=1; continue; }
     kind=$(_dsu_file_kind "$file")
-    hash=$(_dsu_public_key_hash "$file" || true)
-    [[ -n "$hash" ]] || { dsu_bad "$file: unreadable/unsupported"; mismatch=1; continue; }
+    if ! hash=$(_dsu_public_key_hash "$file" "$kind"); then
+      dsu_bad "$file: unreadable/unsupported"; mismatch=1; continue
+    fi
     dsu_keyval "$kind" "$file · $hash"
     [[ -z "$first_hash" ]] && first_hash="$hash"
     [[ "$hash" == "$first_hash" ]] || mismatch=1

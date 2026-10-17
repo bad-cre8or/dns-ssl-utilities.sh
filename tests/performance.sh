@@ -120,7 +120,8 @@ if [[ "${1:-}" == x509 ]]; then
     exit 0
   fi
   [[ "$*" == *'-enddate'* ]] && { echo 'notAfter=Jan  1 00:00:00 2030 GMT'; exit 0; }
-  [[ "$*" == *'-checkhost'* ]] && exit 0
+  [[ "$*" == *'-checkhost'* ]] && { printf 'Hostname %s does match certificate\n' "${@: -1}"; exit 0; }
+  [[ "$*" == *'-checkip'* ]] && { printf 'IP %s does match certificate\n' "${@: -1}"; exit 0; }
   [[ "$*" == *'-text'* ]] && { echo 'Signature Algorithm: sha256WithRSAEncryption'; echo 'Public Key Algorithm: rsaEncryption'; echo 'Public-Key: (2048 bit)'; exit 0; }
 fi
 exec /usr/bin/openssl "$@"

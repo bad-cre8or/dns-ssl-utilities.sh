@@ -384,7 +384,7 @@ dsu_site_check() {
     days=$(dsu_days_until "$cert_end" 2>/dev/null || printf '?')
     dsu_keyval "Issuer" "${cert_issuer:-unknown}"
     dsu_keyval "CN" "${cert_cn:-not present}"
-    if openssl x509 -in "$tmp/cert.pem" -noout -checkhost "$host" >/dev/null 2>&1; then
+    if dsu_cert_matches_host "$tmp/cert.pem" "$host"; then
       dsu_ok "Certificate hostname match"
     else
       dsu_bad "Certificate hostname mismatch"
