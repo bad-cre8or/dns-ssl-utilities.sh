@@ -1,0 +1,40 @@
+
+== REGISTRAR
+  Example Registrar AS
+
+== DNS
+  [OK]  A: 192.0.2.10
+  [OK]  A: 192.0.2.11
+  [OK]  AAAA: 2001:db8::10
+  [OK]  NS: ns1.example.test
+  [OK]  NS: ns2.example.test
+  [X]  DNSSEC not detected
+
+== MAIL & SECURITY POLICY
+  [OK]  MX: 10 mail.example.test
+  [OK]  SPF contains: v=spf1 include:_spf.example.test include:mail.example.test ~all
+  [OK]  DMARC policy: reject
+  [OK]  CAA: 0 issue "letsencrypt.org"
+
+== HOSTING
+  Guessing: Example Hosting
+
+== TLS
+  Issuer             CN=E7,O=Let's Encrypt,C=US
+  CN                 *.example.test
+  [OK]  Certificate hostname match
+  [OK]  Certificate expires in 55 days: Dec 11 20:00:18 2026 GMT
+
+== HTTP / HTTPS
+  HTTP               301
+  HTTPS              200
+  [OK]  HTTP redirects to HTTPS → https://example.test/
+  [!]  HSTS missing
+  [!]  Content-Security-Policy missing
+  [!]  Server header exposed: nginx
+  [OK]  X-Powered-By not exposed
+
+== REVERSE DNS
+  [OK]  192.0.2.10 → web1.example.test
+  [OK]  192.0.2.11 → web2.example.test
+  [X]  2001:db8::10 → PTR lookup failed (resolver timed out)

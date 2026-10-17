@@ -11,6 +11,8 @@ source "$DSU_SCRIPT_DIR/lib/dns.sh"
 source "$DSU_SCRIPT_DIR/lib/ssl.sh"
 # shellcheck source=lib/site.sh
 source "$DSU_SCRIPT_DIR/lib/site.sh"
+# shellcheck source=lib/report.sh
+source "$DSU_SCRIPT_DIR/lib/report.sh"
 # shellcheck source=lib/security.sh
 source "$DSU_SCRIPT_DIR/lib/security.sh"
 
@@ -57,6 +59,7 @@ ${DSU_BOLD}Output flags${DSU_RESET}
   ${DSU_GREEN}--no-color${DSU_RESET}                 Disable ANSI colors ${DSU_GRAY}(NO_COLOR is also supported)${DSU_RESET}
   ${DSU_GREEN}--color${DSU_RESET}                    Force ANSI colors
   ${DSU_GREEN}--ascii${DSU_RESET}                    Use ASCII status markers
+  ${DSU_GREEN}--plain${DSU_RESET}                    Use the original line-by-line overview
   ${DSU_GREEN}--help, -h${DSU_RESET}                 Show help
 
 ${DSU_BOLD}Examples${DSU_RESET}
@@ -129,7 +132,7 @@ _dsu_dispatch_check_command() {
     help|--help|-h) _dsu_main_help ;;
     version|--version|-v) printf '%s %s\n' "$DSU_NAME" "$DSU_VERSION" ;;
     doctor|--doctor|diag|--diag) dsu_doctor ;;
-    *) dsu_site_check "$@" ;;
+    *) dsu_site_report "$@" ;;
   esac
 }
 
@@ -140,6 +143,7 @@ main() {
       --no-color) dsu_disable_color ;;
       --color) _dsu_color_enabled=1; _dsu_apply_colors ;;
       --ascii) DSU_ASCII=1 ;;
+      --plain) DSU_PLAIN=1 ;;
       *) cleaned+=("$arg") ;;
     esac
   done
